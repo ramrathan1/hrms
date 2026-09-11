@@ -12,8 +12,10 @@ dist/
 .env.*
 !.env.example
 
-# Local runtime state
-storage/
+# Local runtime state — anchored to the uploaded-blob directory. Unanchored,
+# "storage/" matches any directory of that name at any depth, which silently
+# swallowed server/src/infra/storage/.
+/server/storage/
 *.log
 
 # Editor and OS noise
