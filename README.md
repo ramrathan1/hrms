@@ -1,93 +1,75 @@
-# Worksuite React
+# Worksuite
 
-A front-end-only rebuild of the Worksuite admin app with its own visual identity, plus a
-built-in **Mail** client and three collaboration modules. There is **no backend** — everything
-runs in the browser on mock data.
+A business-management app: CRM, projects, invoicing, HR, recruitment, support, payroll,
+an internal mail client, and realtime chat and meetings.
 
-## Run
+```
+frontend/   React 18 · Vite · Tailwind · React Router
+server/     NestJS 12 · Prisma 7 · PostgreSQL · Redis · Socket.IO
+```
+
+## Running it
+
+Both halves run side by side. Postgres and Redis need to be reachable.
+
+**Backend** — first time, set up the database:
 
 ```bash
+cd server
 npm install
-npm run dev        # http://localhost:5173  (any email address signs you in)
+cp .env.example .env        # set DATABASE_URL and generate APP_ENCRYPTION_KEY (see below)
+npx prisma migrate deploy   # create the schema
+npm run db:seed             # demo organisation, roles and records
+npm run start:dev           # http://localhost:3001/api/v1  ·  docs at /api
 ```
 
-That's the whole setup. No database, no API server, no environment variables.
-
-## Where the data lives
-
-All records start from the seed arrays in `src/data/*`. On boot, `hydrate()` in
-[`src/lib/api.ts`](src/lib/api.ts) loads anything previously saved out of `localStorage` and
-splices it into those same arrays, so every page keeps reading its plain imports.
-
-Writes go through `api.create / update / replace / remove`, which mutate the shared array and
-persist the result. Practical consequences:
-
-- **Edits survive a refresh.** Create an invoice, reload, it's still there.
-- **Nothing is shared.** The data is in one browser profile. Another person, another browser or
-  a private window each see their own copy.
-- **Clearing site data wipes it.** Use **Settings → Storage → Reset demo data** to put every
-  collection back to what the app ships with (it also clears the audit trail).
-
-## Mail
-
-`/mail` is a full mail client: folder rail, conversation list and reading pane; threading,
-stars, labels, bulk archive/delete, search across subject, participants and body; and a
-composer with recipient validation, autocomplete, drafts, reply and reply-all.
-
-`/mail/accounts` is where you connect a provider. The form captures exactly what a real client
-needs — IMAP and SMTP host, port and security, username, password, signature — with one-click
-presets for Gmail, Outlook, Yahoo, iCloud, Zoho and Fastmail, plus a step-by-step connection
-test.
-
-**Connections are simulated, and the app says so on the page.** IMAP and SMTP are raw TCP
-protocols and a browser cannot open a socket, so a live mailbox needs a server-side bridge that
-this build doesn't have. Your settings are validated and saved; the mailbox itself runs on the
-demo data in `src/data/mail.ts`.
-
-Every mailbox operation goes through [`src/lib/mail.ts`](src/lib/mail.ts). That file is the
-seam: point it at a real mail bridge and the rest of the UI is unchanged.
-
-## Collaboration modules
-
-These were built against a realtime server. Without one they still work on their own, and each
-says plainly what it can't do:
-
-- **Virtual Office** (`/office`) — floors and rooms with simulated occupancy.
-- **Meet** (`/meet`) — your own camera, mic, screen share, recording and a shared whiteboard.
-  Remote participants need a signalling server, so you're always the only one in the room.
-- **Communication** (`/chat`) — channels, DMs, threads and emoji reactions, persisted locally.
-  A teammate replies automatically so a channel doesn't sit silent.
-
-`src/lib/ws.ts` is a local in-process hub standing in for the old WebSocket connection — the
-same message types, handled without a network.
-
-## Design system
-
-Glassmorphism over an aurora gradient (violet `#7C5CFF` → cyan `#4CC3FF` accent), translucent
-blurred surfaces, **Sora** display + **Manrope** body type, rounded-2xl cards, soft violet
-shadows. Tokens live in `src/styles.css` under `@theme` — change the palette in one place.
-
-Component classes (`.card`, `.btn-*`, `.input`) sit inside `@layer components` so plain
-utilities still beat them; without that, `hidden` loses to `.btn-primary` and responsive
-visibility silently stops working.
-
-The shell is responsive: the sidebar docks from `lg` up and becomes a drawer below it, and Mail
-and Chat collapse from three panes to one on a phone.
-
-## Layout
-
-```
-src/
-  data/      seed records, one module per domain (mail.ts, core.ts, work.ts, …)
-  lib/       api.ts (local store), mail.ts (mail engine), ws.ts (local hub), format, filters
-  components/  shared UI — DataTable, FormKit, crud helpers, Kanban, Gantt, charts
-  pages/     one folder per module
-```
-
-## Scripts
+**Frontend**, in a second terminal:
 
 ```bash
-npm run dev       # dev server
-npm run build     # typecheck + production build
-npm run preview   # serve the built output
+cd frontend
+npm install
+npm run dev                 # http://localhost:5173
+```
+
+The frontend reads `VITE_API_URL` and falls back to `http://localhost:3001/api/v1`, so it
+works unconfigured against a local backend.
+
+## Signing in
+
+`npm run db:seed` creates one organisation and six accounts, one per role. The password for
+all of them is `Password123!`:
+
+| Account | Role | Sees |
+| --- | --- | --- |
+| `owner@worksuite.demo` | Owner | Everything |
+| `manager@worksuite.demo` | Manager | Delivery, clients, the people on them |
+| `hr@worksuite.demo` | HR | Hiring, attendance, leave, payroll |
+| `accounts@worksuite.demo` | Accountant | Invoicing, payments, expenses, payroll |
+| `lead@worksuite.demo` | Team Leader | One team's board and timesheets |
+| `employee@worksuite.demo` | Employee | Own work, time and leave |
+
+Roles are enforced on the server, not hidden in the nav: signing in as the accountant really
+does get a 403 from `/employees`, and the app only requests what that role may read.
+
+Change these before the app runs anywhere but a development machine.
+
+## How the two halves fit together
+
+Pages read plain arrays imported from `src/data/*`. An adapter layer in
+[`frontend/src/lib/adapters.ts`](frontend/src/lib/adapters.ts) translates between those shapes
+and the API's — relations, `SCREAMING_ENUM` statuses, decimals as strings — so the transport
+lives in one place rather than smeared across seventy-odd page components.
+
+Data is fetched per route rather than all at sign-in: the shell loads the directory it needs
+everywhere, and each screen asks for its own the first time you open it. Writes are optimistic
+and roll back if the server refuses.
+
+## A note on secrets
+
+`server/.env` holds the JWT signing secrets, the key that encrypts stored mail credentials,
+and your database URL. It is gitignored and must stay that way. `server/.env.example`
+documents what is needed. Generate a real encryption key with:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
 ```

@@ -521,8 +521,14 @@ export function AppShell() {
               <div className="h-full w-1/3 animate-[loading_1s_ease-in-out_infinite] bg-primary" />
             </div>
           )}
-          <ErrorBoundary resetKey={loc.pathname}>
-            <Outlet />
+          {/* Keyed on the route's data, not just its path.
+              Half the screens read their rows from plain arrays rather than
+              React state, so nothing tells them when a lazily-loaded
+              collection arrives. Remounting once, the moment it does, is what
+              stops a page showing its fallback forever. Revisits find the data
+              already loaded and do not remount. */}
+          <ErrorBoundary resetKey={routeData.dataKey}>
+            <Outlet key={routeData.dataKey} />
           </ErrorBoundary>
         </main>
       </div>

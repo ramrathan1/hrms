@@ -13,11 +13,22 @@ import { collectionsFor } from "./routeData";
 export type RouteDataState = {
   /** True while this route's collections are still arriving for the first time. */
   loading: boolean;
+  /**
+   * Changes once, when a route's data finishes arriving.
+   *
+   * Pages read plain module-level arrays, which React cannot observe: splicing
+   * rows into one triggers no render, so a screen that mounted before its data
+   * landed would sit there showing the seed fallback forever. Using this as a
+   * key remounts the screen the moment its data is real — once, on first
+   * visit. A revisit finds everything loaded and does not remount at all.
+   */
+  dataKey: string;
 };
 
 export function useRouteData(): RouteDataState {
   const { pathname } = useLocation();
   const [loading, setLoading] = useState(false);
+  const [arrivals, setArrivals] = useState(0);
 
   // Any write, anywhere, re-renders the tree below the shell — which is how a
   // page rendered against an empty array picks up its rows a moment later.
@@ -33,7 +44,7 @@ export function useRouteData(): RouteDataState {
       return;
     }
 
-    // Already here from an earlier visit: no request, no spinner.
+    // Already here from an earlier visit: no request, no spinner, no remount.
     const missing = needed.filter((c) => !isLoaded(c));
     if (!missing.length) {
       setLoading(false);
@@ -43,7 +54,10 @@ export function useRouteData(): RouteDataState {
     let live = true;
     setLoading(true);
     void ensureLoaded(missing).finally(() => {
-      if (live) setLoading(false);
+      if (!live) return;
+      setLoading(false);
+      // Something new landed, so whatever is on screen is now stale.
+      setArrivals((n) => n + 1);
     });
 
     return () => {
@@ -52,5 +66,5 @@ export function useRouteData(): RouteDataState {
     };
   }, [pathname]);
 
-  return { loading };
+  return { loading, dataKey: `${pathname}:${arrivals}` };
 }
