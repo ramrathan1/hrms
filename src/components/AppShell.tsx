@@ -12,6 +12,7 @@ import { wsc } from "@/lib/ws";
 import { NAV, type NavItem } from "@/nav";
 import { Avatar, Dropdown } from "./ui";
 import { apiErrors, searchAll } from "@/lib/api";
+import { useRouteData } from "@/lib/useRouteData";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { StickyNotes } from "./StickyNotes";
 
@@ -325,6 +326,9 @@ function GlobalSearch({ asInput }: { asInput?: boolean }) {
 }
 
 export function AppShell() {
+  /* Fetches whatever the screen you just opened needs, once. Mounted here so
+     the pages below stay unaware of loading entirely. */
+  const routeData = useRouteData();
   const timer = useTimer();
   const nav = useNavigate();
   const loc = useLocation();
@@ -510,6 +514,13 @@ export function AppShell() {
           />
         </header>
         <main className="min-w-0 flex-1 overflow-y-auto p-4 md:p-6">
+          {/* A thin bar rather than blanking the screen: the page underneath is
+              still usable, and most routes have their data within a moment. */}
+          {routeData.loading && (
+            <div className="fixed inset-x-0 top-0 z-50 h-0.5 overflow-hidden bg-primary-soft">
+              <div className="h-full w-1/3 animate-[loading_1s_ease-in-out_infinite] bg-primary" />
+            </div>
+          )}
           <ErrorBoundary resetKey={loc.pathname}>
             <Outlet />
           </ErrorBoundary>

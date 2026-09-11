@@ -154,3 +154,10 @@ h1, h2, h3, h4,
   }
 
 }
+
+/* The route-loading bar in the app shell: a sliver that sweeps while a screen
+   fetches its data, so navigation reads as busy without hiding the page. */
+@keyframes loading {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(400%); }
+}

@@ -33,7 +33,7 @@ export default function Tickets() {
     defaults: { updated: todayISO(), priority: "Medium", status: "Open" } as never,
   });
   const rows = crud.items.filter(
-    (t) => (status === "All" || t.status === status) && (t.subject + t.id).toLowerCase().includes(q.toLowerCase())
+    (t) => (status === "All" || t.status === status) && (t.subject + t.number).toLowerCase().includes(q.toLowerCase())
   );
   return (
     <>
@@ -60,9 +60,9 @@ export default function Tickets() {
           { label: "Assign to me", onClick: (rs) => crud.updateMany(rs, { agent: CURRENT_USER.id } as never, "assigned") },
         ]}
         columns={[
-          { key: "id", label: "Ticket", render: (t) => (
+          { key: "number", label: "Ticket", render: (t) => (
             <button className="cursor-pointer font-medium text-primary hover:underline" onClick={() => nav(`/tickets/${t.id}`)}>
-              {String(t.id)}
+              {t.number}
             </button>
           ) },
           { key: "subject", label: "Subject", sort: (t) => t.subject, render: (t) => (
@@ -80,7 +80,7 @@ export default function Tickets() {
           crud.rowActions(
             t,
             t.status === "Open" || t.status === "Pending"
-              ? [{ label: "Mark Resolved", onClick: () => { crud.update(t.id, { status: "Resolved" } as never, true); push(`${t.id} resolved`); } }]
+              ? [{ label: "Mark Resolved", onClick: () => { crud.update(t.id, { status: "Resolved" } as never, true); push(`${t.number} resolved`); } }]
               : [{ label: "Reopen", onClick: () => crud.update(t.id, { status: "Open" } as never) }]
           )
         }

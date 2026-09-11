@@ -175,7 +175,7 @@ export default function ClientPortal() {
                   <LifeBuoy size={17} className="text-primary" />
                   <div className="min-w-40 flex-1">
                     <p className="font-semibold">{t.subject}</p>
-                    <p className="text-xs text-muted">{String(t.id)} · updated {fmtDate(t.updated)}</p>
+                    <p className="text-xs text-muted">{t.number} · updated {fmtDate(t.updated)}</p>
                   </div>
                   <StatusPill status={t.priority} />
                   <StatusPill status={t.status} />

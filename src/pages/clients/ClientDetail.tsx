@@ -220,7 +220,7 @@ export default function ClientDetail() {
           rows={tickets.filter((t) => t.requester === client.name)}
           selectable={false}
           columns={[
-            { key: "id", label: "Ticket", render: (t) => <span className="font-medium">{t.id}</span> },
+            { key: "number", label: "Ticket", render: (t) => <span className="font-medium">{t.number}</span> },
             { key: "subject", label: "Subject" },
             { key: "priority", label: "Priority", render: (t) => <StatusPill status={t.priority} /> },
             { key: "status", label: "Status", render: (t) => <StatusPill status={t.status} /> },

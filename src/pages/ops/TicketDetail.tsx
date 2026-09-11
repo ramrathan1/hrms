@@ -55,7 +55,7 @@ export default function TicketDetail() {
 
   const activity = useMemo(
     () => [
-      { id: "a1", by: ticket.requester, text: `created ticket ${ticket.id}`, time: "09:12 AM" },
+      { id: "a1", by: ticket.requester, text: `created ticket ${ticket.number}`, time: "09:12 AM" },
       { id: "a2", by: byId(ticket.agent)?.name ?? "Support", text: `was assigned to this ticket`, time: "09:20 AM" },
       { id: "a3", by: byId(ticket.agent)?.name ?? "Support", text: `set priority to ${priority}`, time: "09:21 AM" },
       { id: "a4", by: CURRENT_USER.name, text: `changed status to ${status}`, time: "now" },
@@ -87,7 +87,7 @@ export default function TicketDetail() {
   return (
     <>
       <PageHeader
-        title={`${ticket.id} · ${ticket.subject}`}
+        title={`${ticket.number} · ${ticket.subject}`}
         crumbs={["Tickets"]}
         actions={
           <>
@@ -97,7 +97,7 @@ export default function TicketDetail() {
                 onClick={() => {
                   setStatus("Resolved");
                   patch({ status: "Resolved" });
-                  push(`${ticket.id} resolved`);
+                  push(`${ticket.number} resolved`);
                 }}
               >
                 Mark Resolved

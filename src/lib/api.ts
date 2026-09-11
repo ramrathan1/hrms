@@ -302,6 +302,64 @@ async function pull(name: string, adapter: Adapter): Promise<void> {
   splice(name, collected.map((r) => adapter.fromServer(r)));
 }
 
+/* ------------------------------------------------------- lazy loading */
+
+/** Collections already pulled this session, so a revisit costs nothing. */
+const loadedCollections = new Set<string>();
+/** In-flight pulls, so two screens asking at once share one request. */
+const pending = new Map<string, Promise<void>>();
+
+export const isLoaded = (collection: string) => loadedCollections.has(collection);
+
+/**
+ * Make sure these collections are in memory, fetching only what is missing.
+ *
+ * This is what replaced loading all seventy-odd collections at sign-in: a
+ * screen declares what it needs, and the ones it doesn't are never requested.
+ * Anything the account may not read is skipped rather than left to 403.
+ */
+export async function ensureLoaded(names: string[]): Promise<void> {
+  const work: Array<Promise<void>> = [];
+
+  for (const name of names) {
+    if (loadedCollections.has(name)) continue;
+
+    const existing = pending.get(name);
+    if (existing) {
+      work.push(existing);
+      continue;
+    }
+
+    const adapter = ADAPTERS[name];
+    if (!adapter) continue;
+    if (adapter.permission && !can(adapter.permission)) {
+      // Nothing this account may see: show nothing rather than demo rows.
+      splice(name, []);
+      loadedCollections.add(name);
+      continue;
+    }
+
+    const job = pull(name, adapter)
+      .then(() => {
+        loadedCollections.add(name);
+      })
+      .catch(() => {
+        // A failed pull is not a loaded collection — let a later visit retry.
+        splice(name, []);
+      })
+      .finally(() => {
+        pending.delete(name);
+      });
+
+    pending.set(name, job);
+    work.push(job);
+  }
+
+  if (!work.length) return;
+  await Promise.allSettled(work);
+  changed();
+}
+
 /**
  * Load everything the app needs to render.
  *
@@ -336,49 +394,32 @@ export async function hydrate(): Promise<boolean> {
     return false;
   }
 
-  /* Ask only for what this account may read. The alternative — request
-     everything and let the server refuse — fills the console with 403s and,
-     worse, leaves the seed rows sitting there looking like real records. */
-  const allowed: Array<[string, Adapter]> = [];
-  for (const [name, adapter] of Object.entries(ADAPTERS)) {
-    if (adapter.skipHydrate) continue;
-    if (!adapter.permission || can(adapter.permission)) allowed.push([name, adapter]);
-    // Nothing this account may see, so show nothing rather than demo data.
-    else splice(name, []);
+  /* Only what the shell itself renders.
+   *
+   * This used to pull every collection the app knows about — seventy-odd
+   * requests before the first screen appeared, most of them for data the
+   * landing page never showed. What remains is the reference data the chrome
+   * needs everywhere: who people are, so a name can be put to an id in the
+   * sidebar, the search box and any list. Everything else is fetched by the
+   * route that actually displays it. */
+  const SHELL_COLLECTIONS = ["employees", "departments", "designations"];
+
+  try {
+    await ensureLoaded(["employees"]);
+    learnPeople(collections.employees as Row[]);
+  } catch {
+    /* the rest can still load */
   }
+  await ensureLoaded(SHELL_COLLECTIONS.filter((c) => c !== "employees"));
 
-  const employees = allowed.find(([name]) => name === "employees");
-  if (employees) {
-    try {
-      await pull("employees", employees[1]);
-      learnPeople(collections.employees as Row[]);
-    } catch {
-      /* the rest can still load */
-    }
-  }
-
-  const rest = allowed.filter(([name]) => name !== "employees");
-  const results = await Promise.allSettled(rest.map(([name, a]) => pull(name, a)));
-
-  const failed = rest
-    .filter((_, i) => results[i].status === "rejected")
-    .map(([name]) => name);
-  if (failed.length) {
-    // Not fatal — but say so once rather than letting stale rows pass for real.
-    console.warn(`[worksuite] couldn't load: ${failed.join(", ")}`);
-    for (const name of failed) splice(name, []);
-  }
-
-  /* The mailbox is loaded here too, not just on the Mail screen: the shell
-     and the portals show an unread count, and a count taken from leftover seed
-     data is worse than no count at all. */
+  /* The mailbox and the admin lists back counters and panes that appear on
+     every screen, so they belong here rather than behind a route. Each is
+     gated: firing a request that can only come back 403 fills the server's
+     log with denials and tells the user nothing. */
   const mailbox = can("mail:manage")
     ? import("./mail").then((m) => Promise.all([m.loadAccounts(), m.loadMailbox()]))
     : Promise.resolve();
 
-  /* Gated for the same reason the collections are: firing a request that can
-     only come back 403 fills the server's log with denials that look like
-     attacks and tells the user nothing. */
   await Promise.allSettled([
     can("settings:read") ? loadSettings() : Promise.resolve(),
     can("roles:read") ? loadRoles() : Promise.resolve(),

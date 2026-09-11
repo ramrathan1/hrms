@@ -1,9 +1,9 @@
 export const tickets = [
-  { id: "TKT#012", subject: "Cannot download invoice PDF", requester: "Joshua Heller", agent: "e9", priority: "High", status: "Open", updated: "2026-08-28", group: "Technical", type: "Problem" },
-  { id: "TKT#011", subject: "Add new user seat", requester: "Aleen Miller", agent: "e4", priority: "Medium", status: "Pending", updated: "2026-08-27", group: "Billing", type: "Request" },
-  { id: "TKT#010", subject: "Report totals mismatch", requester: "Vernice Rohan", agent: "e9", priority: "High", status: "Open", updated: "2026-08-26", group: "Technical", type: "Problem" },
-  { id: "TKT#009", subject: "Change billing address", requester: "Jalon Cronin", agent: "e10", priority: "Low", status: "Resolved", updated: "2026-08-24", group: "Billing", type: "Request" },
-  { id: "TKT#008", subject: "API rate-limit question", requester: "Stone Langworth", agent: "e2", priority: "Medium", status: "Closed", updated: "2026-08-21", group: "Technical", type: "Question" },
+  { id: "tkt-012", number: "TKT#012", subject: "Cannot download invoice PDF", requester: "Joshua Heller", agent: "e9", priority: "High", status: "Open", updated: "2026-08-28", group: "Technical", type: "Problem" },
+  { id: "tkt-011", number: "TKT#011", subject: "Add new user seat", requester: "Aleen Miller", agent: "e4", priority: "Medium", status: "Pending", updated: "2026-08-27", group: "Billing", type: "Request" },
+  { id: "tkt-010", number: "TKT#010", subject: "Report totals mismatch", requester: "Vernice Rohan", agent: "e9", priority: "High", status: "Open", updated: "2026-08-26", group: "Technical", type: "Problem" },
+  { id: "tkt-009", number: "TKT#009", subject: "Change billing address", requester: "Jalon Cronin", agent: "e10", priority: "Low", status: "Resolved", updated: "2026-08-24", group: "Billing", type: "Request" },
+  { id: "tkt-008", number: "TKT#008", subject: "API rate-limit question", requester: "Stone Langworth", agent: "e2", priority: "Medium", status: "Closed", updated: "2026-08-21", group: "Technical", type: "Question" },
 ];
 
 export const events = [
