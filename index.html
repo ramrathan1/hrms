@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%237C5CFF'/%3E%3Cstop offset='1' stop-color='%234CC3FF'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='9' fill='url(%23g)'/%3E%3Ctext x='16' y='23' font-family='Arial Black,Arial' font-size='18' font-weight='900' fill='white' text-anchor='middle'%3EW%3C/text%3E%3C/svg%3E" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Sora:wght@500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <title>Worksuite</title>
+  </head>
+  <body>
+    <!-- Shown until React mounts, so the first paint isn't a blank white page. -->
+    <div id="root">
+      <div style="display:flex;height:100vh;align-items:center;justify-content:center;background:#f6f6fb">
+        <div style="display:flex;flex-direction:column;align-items:center;gap:14px">
+          <div style="width:52px;height:52px;border-radius:16px;background:linear-gradient(135deg,#7C5CFF,#4CC3FF);display:flex;align-items:center;justify-content:center;color:#fff;font:900 26px/1 Arial Black,Arial">W</div>
+          <div style="width:120px;height:3px;border-radius:3px;background:#e6e6f0;overflow:hidden">
+            <div style="width:40%;height:100%;background:#7C5CFF;animation:wsboot 1s ease-in-out infinite"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <style>@keyframes wsboot{0%{transform:translateX(-100%)}100%{transform:translateX(320%)}}</style>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

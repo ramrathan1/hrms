@@ -1,0 +1,2269 @@
+// Worksuite — data model.
+//
+// Tenancy. Organization is the tenant boundary. Rows fall into four scopes and
+// the scope determines how they are filtered:
+//
+//   GLOBAL  no organizationId. Reference data shared by every tenant
+//           (Permission, Currency). Never filtered.
+//   ORG     organizationId, NOT NULL. The default. Prisma's tenant extension
+//           injects the filter on every read and stamps it on every write.
+//   USER    organizationId + userId. Private to one person inside a tenant
+//           (MailAccount, Notification, Todo, RefreshToken).
+//   JOIN    no organizationId of its own; reachable only through an org-scoped
+//           parent, and always written inside the parent's transaction.
+//
+// Identity vs. HR record. User is who signs in; Employee is the HR record.
+// The frontend conflates them — the backend must not, because contractors and
+// ex-staff have Employee rows with no login, and an Owner may have a login
+// with no Employee row.
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  // NestJS compiles to CommonJS; without this the generated client emits
+  // ESM-only syntax (import.meta) that Node then refuses to load from dist.
+  moduleFormat = "cjs"
+  runtime      = "nodejs"
+}
+
+// Prisma 7: the connection URL lives in prisma.config.ts (for migrations) and
+// is supplied to PrismaClient at runtime through the pg driver adapter.
+datasource db {
+  provider = "postgresql"
+}
+
+/**
+ * ------------------------------------------------------------------ GLOBAL
+ */
+
+model Permission {
+  id          String   @id @default(uuid()) @db.Uuid
+  /// "invoices:create" — the string the PermissionsGuard checks
+  key         String   @unique
+  module      String
+  action      String
+  description String?
+  createdAt   DateTime @default(now())
+
+  roles RolePermission[]
+
+  @@index([module])
+  @@map("permissions")
+}
+
+/**
+ * ---------------------------------------------------------------- TENANCY
+ */
+
+model Organization {
+  id        String    @id @default(uuid()) @db.Uuid
+  name      String
+  slug      String    @unique
+  email     String?
+  phone     String?
+  website   String?
+  address   String?
+  logoUrl   String?
+  currency  String    @default("USD")
+  timezone  String    @default("UTC")
+  /// Soft-delete: a suspended tenant keeps its data but cannot sign in.
+  status    OrgStatus @default(ACTIVE)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  users             User[]
+  roles             Role[]
+  employees         Employee[]
+  departments       Department[]
+  designations      Designation[]
+  clients           Client[]
+  clientContacts    ClientContact[]
+  leads             Lead[]
+  pipelineStages    PipelineStage[]
+  deals             Deal[]
+  leadNotes         LeadNote[]
+  projects          Project[]
+  milestones        Milestone[]
+  tasks             Task[]
+  timeLogs          TimeLog[]
+  contracts         Contract[]
+  invoices          Invoice[]
+  estimates         Estimate[]
+  payments          Payment[]
+  expenses          Expense[]
+  creditNotes       CreditNote[]
+  bankAccounts      BankAccount[]
+  leaveTypes        LeaveType[]
+  leaveRequests     LeaveRequest[]
+  attendanceRecords AttendanceRecord[]
+  shifts            Shift[]
+  holidays          Holiday[]
+  salaries          Salary[]
+  payslips          Payslip[]
+  jobs              Job[]
+  applications      Application[]
+  interviews        Interview[]
+  offers            Offer[]
+  tickets           Ticket[]
+  ticketReplies     TicketReply[]
+  assets            Asset[]
+  events            Event[]
+  notices           Notice[]
+  kbArticles        KbArticle[]
+  letterTemplates   LetterTemplate[]
+  generatedLetters  GeneratedLetter[]
+  mailAccounts      MailAccount[]
+  mailMessages      MailMessage[]
+  channels          Channel[]
+  channelMessages   ChannelMessage[]
+  reviewMeetings    ReviewMeeting[]
+  attachments       Attachment[]
+  notifications     Notification[]
+  todos             Todo[]
+  settings          Setting[]
+  auditLogs         AuditLog[]
+  refreshTokens     RefreshToken[]
+  objectives        Objective[]
+  discussions       Discussion[]
+  replies           DiscussionReply[]
+  leadForms         LeadForm[]
+  leadEmails        LeadEmail[]
+  proposals         Proposal[]
+  recurringInvoices RecurringInvoice[]
+  recurringExpenses RecurringExpense[]
+  bankTransactions  BankTransaction[]
+  awards            Award[]
+  appreciations     Appreciation[]
+  salaryChanges     SalaryChange[]
+  overtimeRequests  OvertimeRequest[]
+  roadmapIdeas      RoadmapIdea[]
+  bioLinks          BioLink[]
+  qrCodes           QrCode[]
+  webhooks          Webhook[]
+  hostings          Hosting[]
+  domains           Domain[]
+  biometricDevices  BiometricDevice[]
+  biometricPunches  BiometricPunch[]
+  floors            Floor[]
+  officeRooms       OfficeRoom[]
+  teamMeetings      TeamMeeting[]
+  recordings        Recording[]
+
+  @@map("organizations")
+}
+
+enum OrgStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+/**
+ * --------------------------------------------------------------- IDENTITY
+ */
+
+model User {
+  id              String     @id @default(uuid()) @db.Uuid
+  organizationId  String     @db.Uuid
+  email           String
+  /// bcrypt, 10 rounds. Never selected by default — see PrismaService.
+  passwordHash    String
+  name            String
+  avatarUrl       String?
+  status          UserStatus @default(ACTIVE)
+  lastLoginAt     DateTime?
+  /// Set when an admin forces a re-login; invalidates tokens issued earlier.
+  tokensValidFrom DateTime   @default(now())
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  organization         Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  roles                UserRole[]
+  refreshTokens        RefreshToken[]
+  employee             Employee?
+  auditLogs            AuditLog[]
+  notifications        Notification[]
+  todos                Todo[]
+  mailAccounts         MailAccount[]
+  assignedTasks        TaskAssignee[]
+  projectSeats         ProjectMember[]
+  channelSeats         ChannelMember[]
+  channelPosts         ChannelMessage[]
+  roadmapIdeaVotes     RoadmapIdeaVote[]
+  teamMeetingAttendees TeamMeetingAttendee[]
+
+  /// Email is unique per tenant, not globally — the same person may hold an
+  /// account in two organizations.
+  @@unique([organizationId, email])
+  @@index([organizationId, status])
+  @@map("users")
+}
+
+enum UserStatus {
+  ACTIVE
+  INVITED
+  SUSPENDED
+}
+
+model RefreshToken {
+  id             String    @id @default(uuid()) @db.Uuid
+  organizationId String    @db.Uuid
+  userId         String    @db.Uuid
+  /// SHA-256 of the token. The raw value only ever exists in the response.
+  tokenHash      String    @unique
+  /// Rotation chain: set when this token is exchanged for a new one. Reuse of
+  /// a rotated token means theft — the whole family is revoked.
+  replacedById   String?   @db.Uuid
+  revokedAt      DateTime?
+  expiresAt      DateTime
+  userAgent      String?
+  ip             String?
+  createdAt      DateTime  @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, revokedAt])
+  @@index([expiresAt])
+  @@map("refresh_tokens")
+}
+
+/**
+ * ------------------------------------------------------------------- RBAC
+ */
+
+model Role {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  /// Stable machine key: OWNER, MANAGER, TEAM_LEADER, HR, ACCOUNTANT,
+  /// EMPLOYEE, CLIENT. Mirrors the frontend's roles.ts.
+  key            String
+  name           String
+  description    String?
+  /// System roles cannot be renamed or deleted, only re-permissioned.
+  isSystem       Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  permissions  RolePermission[]
+  users        UserRole[]
+
+  @@unique([organizationId, key])
+  @@map("roles")
+}
+
+model RolePermission {
+  roleId       String @db.Uuid
+  permissionId String @db.Uuid
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model UserRole {
+  userId String @db.Uuid
+  roleId String @db.Uuid
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+  @@map("user_roles")
+}
+
+/**
+ * -------------------------------------------------------------- DIRECTORY
+ */
+
+model Department {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  name           String
+  parentId       String?  @db.Uuid
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  parent       Department?  @relation("DeptTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children     Department[] @relation("DeptTree")
+  employees    Employee[]
+
+  @@unique([organizationId, name])
+  @@map("departments")
+}
+
+model Designation {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  name           String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  employees    Employee[]
+
+  @@unique([organizationId, name])
+  @@map("designations")
+}
+
+model Employee {
+  id             String         @id @default(uuid()) @db.Uuid
+  organizationId String         @db.Uuid
+  /// Optional: an Employee may exist without a login.
+  userId         String?        @unique @db.Uuid
+  employeeCode   String
+  name           String
+  email          String
+  phone          String?
+  departmentId   String?        @db.Uuid
+  designationId  String?        @db.Uuid
+  reportsToId    String?        @db.Uuid
+  joinedOn       DateTime       @db.Date
+  exitedOn       DateTime?      @db.Date
+  hourlyRate     Decimal        @default(0) @db.Decimal(12, 2)
+  employmentType EmploymentType @default(FULL_TIME)
+  status         EmployeeStatus @default(ACTIVE)
+  address        String?
+  about          String?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  organization      Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user              User?              @relation(fields: [userId], references: [id], onDelete: SetNull)
+  department        Department?        @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  designation       Designation?       @relation(fields: [designationId], references: [id], onDelete: SetNull)
+  reportsTo         Employee?          @relation("OrgTree", fields: [reportsToId], references: [id], onDelete: SetNull)
+  directReports     Employee[]         @relation("OrgTree")
+  leaveRequests     LeaveRequest[]
+  attendanceRecords AttendanceRecord[]
+  timeLogs          TimeLog[]
+  expenses          Expense[]
+  salaries          Salary[]
+  payslips          Payslip[]
+  emergencyContacts EmergencyContact[]
+  documents         EmployeeDocument[]
+  leaveBalances     LeaveBalance[]
+  objectives        Objective[]
+  appreciations     Appreciation[]
+  salaryChanges     SalaryChange[]
+  overtimeRequests  OvertimeRequest[]
+  biometricPunches  BiometricPunch[]
+  reviewMeetings    ReviewMeeting[]
+
+  @@unique([organizationId, employeeCode])
+  @@index([organizationId, status])
+  @@index([organizationId, departmentId])
+  @@map("employees")
+}
+
+enum EmploymentType {
+  FULL_TIME
+  PART_TIME
+  CONTRACT
+  INTERN
+  TRAINEE
+}
+
+enum EmployeeStatus {
+  ACTIVE
+  ON_LEAVE
+  EXITED
+}
+
+model EmergencyContact {
+  id         String   @id @default(uuid()) @db.Uuid
+  employeeId String   @db.Uuid
+  name       String
+  relation   String?
+  phone      String
+  createdAt  DateTime @default(now())
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([employeeId])
+  @@map("emergency_contacts")
+}
+
+model EmployeeDocument {
+  id         String    @id @default(uuid()) @db.Uuid
+  employeeId String    @db.Uuid
+  name       String
+  category   String?
+  fileId     String?   @db.Uuid
+  issuedOn   DateTime? @db.Date
+  createdAt  DateTime  @default(now())
+
+  employee Employee    @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  file     Attachment? @relation(fields: [fileId], references: [id], onDelete: SetNull)
+
+  @@index([employeeId])
+  @@map("employee_documents")
+}
+
+/**
+ * ---------------------------------------------------------------- CLIENTS
+ */
+
+model Client {
+  id                  String       @id @default(uuid()) @db.Uuid
+  organizationId      String       @db.Uuid
+  name                String
+  company             String
+  email               String?
+  phone               String?
+  website             String?
+  category            String?
+  address             String?
+  shippingAddress     String?
+  note                String?
+  status              ClientStatus @default(ACTIVE)
+  /// Set when a Lead is converted, so the CRM history survives.
+  convertedFromLeadId String?      @db.Uuid
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+
+  organization      Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  contacts          ClientContact[]
+  projects          Project[]
+  invoices          Invoice[]
+  estimates         Estimate[]
+  creditNotes       CreditNote[]
+  tickets           Ticket[]
+  recurringInvoices RecurringInvoice[]
+  hostings          Hosting[]
+  domains           Domain[]
+  contracts         Contract[]
+
+  @@index([organizationId, status])
+  @@map("clients")
+}
+
+enum ClientStatus {
+  ACTIVE
+  INACTIVE
+}
+
+model ClientContact {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  clientId       String   @db.Uuid
+  name           String
+  email          String?
+  phone          String?
+  role           String?
+  isPrimary      Boolean  @default(false)
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  client       Client       @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([clientId])
+  @@map("client_contacts")
+}
+
+/**
+ * -------------------------------------------------------------------- CRM
+ */
+
+model PipelineStage {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  name           String
+  position       Int
+  /// Marks the terminal stages so win-rate maths doesn't guess.
+  outcome        StageOutcome @default(OPEN)
+  createdAt      DateTime     @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  deals        Deal[]
+
+  @@unique([organizationId, name])
+  @@index([organizationId, position])
+  @@map("pipeline_stages")
+}
+
+enum StageOutcome {
+  OPEN
+  WON
+  LOST
+}
+
+model Lead {
+  id                String     @id @default(uuid()) @db.Uuid
+  organizationId    String     @db.Uuid
+  name              String
+  company           String?
+  email             String?
+  phone             String?
+  source            String?
+  status            LeadStatus @default(NEW)
+  ownerId           String?    @db.Uuid
+  value             Decimal?   @db.Decimal(14, 2)
+  convertedAt       DateTime?
+  convertedClientId String?    @db.Uuid
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  notes        LeadNote[]
+  deals        Deal[]
+  leadForm     LeadForm?    @relation(fields: [leadFormId], references: [id])
+  leadFormId   String?      @db.Uuid
+  leadEmails   LeadEmail[]
+  proposals    Proposal[]
+
+  @@index([organizationId, status])
+  @@map("leads")
+}
+
+enum LeadStatus {
+  NEW
+  CONTACTED
+  QUALIFIED
+  PROPOSAL
+  CONVERTED
+  LOST
+}
+
+model LeadNote {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  leadId         String   @db.Uuid
+  body           String
+  authorId       String?  @db.Uuid
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  lead         Lead         @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@index([leadId])
+  @@map("lead_notes")
+}
+
+model Deal {
+  id              String    @id @default(uuid()) @db.Uuid
+  organizationId  String    @db.Uuid
+  leadId          String?   @db.Uuid
+  stageId         String    @db.Uuid
+  title           String
+  value           Decimal   @default(0) @db.Decimal(14, 2)
+  currency        String    @default("USD")
+  probability     Int       @default(0)
+  expectedCloseOn DateTime? @db.Date
+  closedAt        DateTime?
+  ownerId         String?   @db.Uuid
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  lead         Lead?         @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  stage        PipelineStage @relation(fields: [stageId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, stageId])
+  @@map("deals")
+}
+
+/**
+ * --------------------------------------------------------------- PROJECTS
+ */
+
+model Project {
+  id             String        @id @default(uuid()) @db.Uuid
+  organizationId String        @db.Uuid
+  clientId       String?       @db.Uuid
+  code           String
+  name           String
+  summary        String?
+  category       String?
+  status         ProjectStatus @default(NOT_STARTED)
+  startsOn       DateTime?     @db.Date
+  deadlineOn     DateTime?     @db.Date
+  budget         Decimal       @default(0) @db.Decimal(14, 2)
+  currency       String        @default("USD")
+  progress       Int           @default(0)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  client       Client?         @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  members      ProjectMember[]
+  milestones   Milestone[]
+  tasks        Task[]
+  timeLogs     TimeLog[]
+  invoices     Invoice[]
+  discussions  Discussion[]
+  teamMeetings TeamMeeting[]
+  contracts    Contract[]
+
+  @@unique([organizationId, code])
+  @@index([organizationId, status])
+  @@index([organizationId, clientId])
+  @@map("projects")
+}
+
+enum ProjectStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  ON_HOLD
+  COMPLETED
+  CANCELLED
+}
+
+/// JOIN — the frontend's `members: string[]` array, normalised.
+model ProjectMember {
+  projectId String   @db.Uuid
+  userId    String   @db.Uuid
+  role      String?
+  addedAt   DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([projectId, userId])
+  @@index([userId])
+  @@map("project_members")
+}
+
+model Milestone {
+  id             String          @id @default(uuid()) @db.Uuid
+  organizationId String          @db.Uuid
+  projectId      String          @db.Uuid
+  title          String
+  cost           Decimal         @default(0) @db.Decimal(14, 2)
+  dueOn          DateTime?       @db.Date
+  status         MilestoneStatus @default(NOT_STARTED)
+  position       Int             @default(0)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  project      Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  tasks        Task[]
+
+  @@index([projectId])
+  @@map("milestones")
+}
+
+enum MilestoneStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  COMPLETE
+}
+
+model Task {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  projectId      String?      @db.Uuid
+  milestoneId    String?      @db.Uuid
+  code           String
+  title          String
+  description    String?
+  status         TaskStatus   @default(TODO)
+  priority       TaskPriority @default(MEDIUM)
+  dueOn          DateTime?    @db.Date
+  completedAt    DateTime?
+  estimatedHours Decimal      @default(0) @db.Decimal(8, 2)
+  /// Provenance: a task raised from a chat message or a meeting keeps its source.
+  sourceType     TaskSource?
+  sourceRef      String?
+  createdById    String?      @db.Uuid
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  project      Project?       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  milestone    Milestone?     @relation(fields: [milestoneId], references: [id], onDelete: SetNull)
+  assignees    TaskAssignee[]
+  timeLogs     TimeLog[]
+
+  @@unique([organizationId, code])
+  @@index([organizationId, status])
+  @@index([organizationId, dueOn])
+  @@index([projectId, status])
+  @@map("tasks")
+}
+
+enum TaskStatus {
+  INCOMPLETE
+  TODO
+  DOING
+  COMPLETED
+}
+
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum TaskSource {
+  CHAT
+  MEETING
+  TICKET
+  MANUAL
+}
+
+/// JOIN — the frontend's `assignees: string[]`, normalised.
+model TaskAssignee {
+  taskId     String   @db.Uuid
+  userId     String   @db.Uuid
+  assignedAt DateTime @default(now())
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([taskId, userId])
+  @@index([userId])
+  @@map("task_assignees")
+}
+
+model TimeLog {
+  id             String    @id @default(uuid()) @db.Uuid
+  organizationId String    @db.Uuid
+  employeeId     String    @db.Uuid
+  taskId         String?   @db.Uuid
+  projectId      String?   @db.Uuid
+  startedAt      DateTime
+  endedAt        DateTime?
+  /// Persisted rather than derived so an edited entry keeps its billed value.
+  hours          Decimal   @default(0) @db.Decimal(8, 2)
+  note           String?
+  billable       Boolean   @default(true)
+  createdAt      DateTime  @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  employee     Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  task         Task?        @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  project      Project?     @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, employeeId, startedAt])
+  @@index([taskId])
+  @@map("time_logs")
+}
+
+model Discussion {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  projectId      String   @db.Uuid
+  title          String
+  body           String
+  authorId       String?  @db.Uuid
+  createdAt      DateTime @default(now())
+
+  organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  project      Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  replies      DiscussionReply[]
+
+  @@index([projectId])
+  @@map("discussions")
+}
+
+model Contract {
+  id             String    @id @default(uuid()) @db.Uuid
+  organizationId String    @db.Uuid
+  clientId       String?   @db.Uuid
+  projectId      String?   @db.Uuid
+  number         String
+  title          String
+  /// Support · Development · Retainer …
+  kind           String?
+  value          Decimal   @default(0) @db.Decimal(14, 2)
+  startsOn       DateTime? @db.Date
+  endsOn         DateTime? @db.Date
+  status         String    @default("Draft")
+  signedAt       DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  client       Client?      @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  project      Project?     @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, number])
+  @@index([organizationId, status])
+  @@map("contracts")
+}
+
+/**
+ * ---------------------------------------------------------------- BILLING
+ */
+
+model Invoice {
+  id             String        @id @default(uuid()) @db.Uuid
+  organizationId String        @db.Uuid
+  clientId       String?       @db.Uuid
+  projectId      String?       @db.Uuid
+  number         String
+  issuedOn       DateTime      @db.Date
+  dueOn          DateTime?     @db.Date
+  currency       String        @default("USD")
+  subtotal       Decimal       @default(0) @db.Decimal(14, 2)
+  taxTotal       Decimal       @default(0) @db.Decimal(14, 2)
+  total          Decimal       @default(0) @db.Decimal(14, 2)
+  /// Derived from payments inside a transaction; never trusted from a client.
+  paidAmount     Decimal       @default(0) @db.Decimal(14, 2)
+  status         InvoiceStatus @default(DRAFT)
+  note           String?
+  sentAt         DateTime?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  client       Client?       @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  project      Project?      @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  items        InvoiceItem[]
+  payments     Payment[]
+
+  @@unique([organizationId, number])
+  @@index([organizationId, status])
+  @@index([organizationId, clientId])
+  @@index([organizationId, dueOn])
+  @@map("invoices")
+}
+
+enum InvoiceStatus {
+  DRAFT
+  UNPAID
+  PARTIALLY_PAID
+  PAID
+  OVERDUE
+  CANCELLED
+}
+
+model InvoiceItem {
+  id          String  @id @default(uuid()) @db.Uuid
+  invoiceId   String  @db.Uuid
+  description String
+  quantity    Decimal @default(1) @db.Decimal(10, 2)
+  unitPrice   Decimal @default(0) @db.Decimal(14, 2)
+  taxRate     Decimal @default(0) @db.Decimal(5, 2)
+  amount      Decimal @default(0) @db.Decimal(14, 2)
+  position    Int     @default(0)
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+  @@map("invoice_items")
+}
+
+model Payment {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  invoiceId      String   @db.Uuid
+  amount         Decimal  @db.Decimal(14, 2)
+  paidOn         DateTime @db.Date
+  method         String   @default("Manual")
+  reference      String?
+  bankAccountId  String?  @db.Uuid
+  /// A refund is a negative payment pointing at the original.
+  refundOfId     String?  @db.Uuid
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invoice      Invoice      @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  bankAccount  BankAccount? @relation(fields: [bankAccountId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, invoiceId])
+  @@index([organizationId, paidOn])
+  @@map("payments")
+}
+
+model Estimate {
+  id                 String    @id @default(uuid()) @db.Uuid
+  organizationId     String    @db.Uuid
+  clientId           String?   @db.Uuid
+  number             String
+  issuedOn           DateTime  @db.Date
+  validUntil         DateTime? @db.Date
+  currency           String    @default("USD")
+  total              Decimal   @default(0) @db.Decimal(14, 2)
+  status             String    @default("Draft")
+  convertedInvoiceId String?   @db.Uuid
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  client       Client?      @relation(fields: [clientId], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, number])
+  @@map("estimates")
+}
+
+model CreditNote {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  clientId       String?  @db.Uuid
+  invoiceId      String?  @db.Uuid
+  number         String
+  issuedOn       DateTime @db.Date
+  amount         Decimal  @default(0) @db.Decimal(14, 2)
+  /// How much of the credit has been used. Status is derived from this.
+  appliedAmount  Decimal  @default(0) @db.Decimal(14, 2)
+  reason         String?
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  client       Client?      @relation(fields: [clientId], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, number])
+  @@map("credit_notes")
+}
+
+model Expense {
+  id             String         @id @default(uuid()) @db.Uuid
+  organizationId String         @db.Uuid
+  employeeId     String?        @db.Uuid
+  projectId      String?        @db.Uuid
+  item           String
+  category       String?
+  amount         Decimal        @db.Decimal(14, 2)
+  currency       String         @default("USD")
+  spentOn        DateTime       @db.Date
+  status         ApprovalStatus @default(PENDING)
+  decidedById    String?        @db.Uuid
+  decidedAt      DateTime?
+  receiptFileId  String?        @db.Uuid
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  employee     Employee?    @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, status])
+  @@map("expenses")
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model BankAccount {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  name           String
+  bankName       String?
+  /// Bank · Cash · Card — petty cash is an account too.
+  kind           String   @default("Bank")
+  /// Last four digits only. The full number is never stored.
+  accountNumber  String?
+  currency       String   @default("USD")
+  openingBalance Decimal  @default(0) @db.Decimal(14, 2)
+  isPrimary      Boolean  @default(false)
+  createdAt      DateTime @default(now())
+
+  organization     Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  payments         Payment[]
+  bankTransactions BankTransaction[]
+
+  @@map("bank_accounts")
+}
+
+/**
+ * -------------------------------------------------------------- PEOPLEOPS
+ */
+
+model LeaveType {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  name           String
+  /// Default annual entitlement. LeaveBalance may override per employee —
+  /// the frontend hardcodes 10/10/10, which this replaces.
+  defaultQuota   Decimal  @default(0) @db.Decimal(5, 1)
+  paid           Boolean  @default(true)
+  createdAt      DateTime @default(now())
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  requests     LeaveRequest[]
+  balances     LeaveBalance[]
+
+  @@unique([organizationId, name])
+  @@map("leave_types")
+}
+
+/// Per employee, per type, per year. The authoritative entitlement record.
+model LeaveBalance {
+  id          String  @id @default(uuid()) @db.Uuid
+  employeeId  String  @db.Uuid
+  leaveTypeId String  @db.Uuid
+  year        Int
+  quota       Decimal @db.Decimal(5, 1)
+  /// Maintained transactionally on approve / reject / cancel.
+  used        Decimal @default(0) @db.Decimal(5, 1)
+  pending     Decimal @default(0) @db.Decimal(5, 1)
+
+  employee  Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  leaveType LeaveType @relation(fields: [leaveTypeId], references: [id], onDelete: Cascade)
+
+  @@unique([employeeId, leaveTypeId, year])
+  @@map("leave_balances")
+}
+
+model LeaveRequest {
+  id             String         @id @default(uuid()) @db.Uuid
+  organizationId String         @db.Uuid
+  employeeId     String         @db.Uuid
+  leaveTypeId    String         @db.Uuid
+  startsOn       DateTime       @db.Date
+  endsOn         DateTime       @db.Date
+  /// 0.5 for a half day, else whole days. Matches the frontend's rule.
+  days           Decimal        @db.Decimal(5, 1)
+  halfDay        Boolean        @default(false)
+  reason         String?
+  status         ApprovalStatus @default(PENDING)
+  decidedById    String?        @db.Uuid
+  decidedAt      DateTime?
+  decisionNote   String?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  employee     Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  leaveType    LeaveType    @relation(fields: [leaveTypeId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, status])
+  @@index([employeeId, startsOn])
+  @@map("leave_requests")
+}
+
+/// Real attendance. Replaces the frontend's synthetic attendanceFor() formula.
+model AttendanceRecord {
+  id             String           @id @default(uuid()) @db.Uuid
+  organizationId String           @db.Uuid
+  employeeId     String           @db.Uuid
+  workDate       DateTime         @db.Date
+  clockInAt      DateTime?
+  clockOutAt     DateTime?
+  status         AttendanceStatus @default(PRESENT)
+  location       String?
+  note           String?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  employee     Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  /// One row per employee per day — makes clock-in idempotent.
+  @@unique([employeeId, workDate])
+  @@index([organizationId, workDate])
+  @@map("attendance_records")
+}
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  LATE
+  HALF_DAY
+  ON_LEAVE
+  HOLIDAY
+  WEEKEND
+}
+
+model Shift {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  name           String
+  startsAt       String
+  endsAt         String
+  workingDays    String   @default("Mon-Fri")
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, name])
+  @@map("shifts")
+}
+
+model Holiday {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  name           String
+  holidayOn      DateTime @db.Date
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, holidayOn, name])
+  @@map("holidays")
+}
+
+/**
+ * ---------------------------------------------------------------- PAYROLL
+ */
+
+model Salary {
+  id             String    @id @default(uuid()) @db.Uuid
+  organizationId String    @db.Uuid
+  employeeId     String    @db.Uuid
+  annualAmount   Decimal   @db.Decimal(14, 2)
+  currency       String    @default("USD")
+  effectiveFrom  DateTime  @db.Date
+  /// Null means current. History is append-only.
+  effectiveTo    DateTime? @db.Date
+  createdAt      DateTime  @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  employee     Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([employeeId, effectiveFrom])
+  @@map("salaries")
+}
+
+model Payslip {
+  id             String        @id @default(uuid()) @db.Uuid
+  organizationId String        @db.Uuid
+  employeeId     String        @db.Uuid
+  periodStart    DateTime      @db.Date
+  periodEnd      DateTime      @db.Date
+  gross          Decimal       @db.Decimal(14, 2)
+  deductions     Decimal       @default(0) @db.Decimal(14, 2)
+  net            Decimal       @db.Decimal(14, 2)
+  status         PayslipStatus @default(DRAFT)
+  paidOn         DateTime?     @db.Date
+  createdAt      DateTime      @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  employee     Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@unique([employeeId, periodStart])
+  @@index([organizationId, status])
+  @@map("payslips")
+}
+
+enum PayslipStatus {
+  DRAFT
+  APPROVED
+  PAID
+}
+
+/**
+ * ------------------------------------------------------------ PERFORMANCE
+ */
+
+model Objective {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  employeeId     String?  @db.Uuid
+  title          String
+  description    String?
+  /// Company · Team · Individual
+  kind           String   @default("Team")
+  ownerId        String?  @db.Uuid
+  priority       String   @default("Medium")
+  /// How often the owner is expected to check in: Weekly, Monthly, Quarterly.
+  checkinCadence String   @default("Monthly")
+  periodStart    DateTime @db.Date
+  periodEnd      DateTime @db.Date
+  progress       Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  employee     Employee?    @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+  keyResults   KeyResult[]
+
+  @@index([organizationId, employeeId])
+  @@map("objectives")
+}
+
+model KeyResult {
+  id          String  @id @default(uuid()) @db.Uuid
+  objectiveId String  @db.Uuid
+  title       String
+  target      Decimal @default(0) @db.Decimal(12, 2)
+  current     Decimal @default(0) @db.Decimal(12, 2)
+  unit        String?
+
+  objective Objective @relation(fields: [objectiveId], references: [id], onDelete: Cascade)
+
+  @@index([objectiveId])
+  @@map("key_results")
+}
+
+/**
+ * ------------------------------------------------------------ RECRUITMENT
+ */
+
+model Job {
+  id             String         @id @default(uuid()) @db.Uuid
+  organizationId String         @db.Uuid
+  title          String
+  departmentId   String?        @db.Uuid
+  location       String?
+  employmentType EmploymentType @default(FULL_TIME)
+  openings       Int            @default(1)
+  status         JobStatus      @default(OPEN)
+  description    String?
+  opensOn        DateTime?      @db.Date
+  closesOn       DateTime?      @db.Date
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  applications Application[]
+
+  @@index([organizationId, status])
+  @@map("jobs")
+}
+
+enum JobStatus {
+  DRAFT
+  OPEN
+  CLOSED
+}
+
+model Application {
+  id             String           @id @default(uuid()) @db.Uuid
+  organizationId String           @db.Uuid
+  jobId          String           @db.Uuid
+  name           String
+  email          String
+  phone          String?
+  resumeFileId   String?          @db.Uuid
+  skills         String[]
+  stage          ApplicationStage @default(APPLIED)
+  rating         Int?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  job          Job          @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  interviews   Interview[]
+  offers       Offer[]
+
+  @@index([organizationId, stage])
+  @@index([jobId, stage])
+  @@map("applications")
+}
+
+enum ApplicationStage {
+  APPLIED
+  PHONE_SCREEN
+  INTERVIEW
+  OFFER
+  HIRED
+  REJECTED
+}
+
+model Interview {
+  id             String          @id @default(uuid()) @db.Uuid
+  organizationId String          @db.Uuid
+  applicationId  String          @db.Uuid
+  scheduledAt    DateTime
+  round          String?
+  mode           String?
+  interviewerId  String?         @db.Uuid
+  status         InterviewStatus @default(SCHEDULED)
+  rating         Int?
+  feedback       String?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  application  Application  @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, scheduledAt])
+  @@map("interviews")
+}
+
+enum InterviewStatus {
+  SCHEDULED
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+}
+
+model Offer {
+  id                String      @id @default(uuid()) @db.Uuid
+  organizationId    String      @db.Uuid
+  applicationId     String      @db.Uuid
+  salaryAmount      Decimal     @db.Decimal(14, 2)
+  currency          String      @default("USD")
+  startsOn          DateTime    @db.Date
+  status            OfferStatus @default(SENT)
+  respondedAt       DateTime?
+  /// Set when acceptance creates the Employee row, inside one transaction.
+  createdEmployeeId String?     @db.Uuid
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  application  Application  @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, status])
+  @@map("offers")
+}
+
+enum OfferStatus {
+  DRAFT
+  SENT
+  ACCEPTED
+  DECLINED
+  WITHDRAWN
+}
+
+/**
+ * ---------------------------------------------------------------- SUPPORT
+ */
+
+model Ticket {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  number         String
+  subject        String
+  body           String?
+  clientId       String?      @db.Uuid
+  requesterName  String?
+  assigneeId     String?      @db.Uuid
+  priority       TaskPriority @default(MEDIUM)
+  status         TicketStatus @default(OPEN)
+  channel        String?
+  closedAt       DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  client       Client?       @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  replies      TicketReply[]
+
+  @@unique([organizationId, number])
+  @@index([organizationId, status])
+  @@map("tickets")
+}
+
+enum TicketStatus {
+  OPEN
+  PENDING
+  RESOLVED
+  CLOSED
+}
+
+model TicketReply {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  ticketId       String   @db.Uuid
+  authorId       String?  @db.Uuid
+  body           String
+  /// Internal notes never reach the client portal.
+  isInternal     Boolean  @default(false)
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  ticket       Ticket       @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  @@index([ticketId])
+  @@map("ticket_replies")
+}
+
+/**
+ * -------------------------------------------------------------- WORKPLACE
+ */
+
+model Asset {
+  id             String      @id @default(uuid()) @db.Uuid
+  organizationId String      @db.Uuid
+  name           String
+  assetCode      String?
+  category       String?
+  serialNumber   String?
+  purchasedOn    DateTime?   @db.Date
+  cost           Decimal?    @db.Decimal(14, 2)
+  assignedToId   String?     @db.Uuid
+  status         AssetStatus @default(AVAILABLE)
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  movements    AssetMovement[]
+
+  @@index([organizationId, status])
+  @@map("assets")
+}
+
+enum AssetStatus {
+  AVAILABLE
+  ASSIGNED
+  IN_REPAIR
+  RETIRED
+}
+
+/// Was written by the frontend but never modelled or read back.
+model AssetMovement {
+  id         String   @id @default(uuid()) @db.Uuid
+  assetId    String   @db.Uuid
+  fromUserId String?  @db.Uuid
+  toUserId   String?  @db.Uuid
+  movedAt    DateTime @default(now())
+  note       String?
+
+  asset Asset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  @@index([assetId])
+  @@map("asset_movements")
+}
+
+model Event {
+  id             String    @id @default(uuid()) @db.Uuid
+  organizationId String    @db.Uuid
+  title          String
+  description    String?
+  startsAt       DateTime
+  endsAt         DateTime?
+  location       String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, startsAt])
+  @@map("events")
+}
+
+model Notice {
+  id             String    @id @default(uuid()) @db.Uuid
+  organizationId String    @db.Uuid
+  title          String
+  body           String
+  audience       String    @default("All")
+  publishedAt    DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, publishedAt])
+  @@map("notices")
+}
+
+model KbArticle {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  title          String
+  body           String
+  category       String?
+  /// Client-visible articles show in the client portal.
+  visibility     String   @default("Internal")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, category])
+  @@map("kb_articles")
+}
+
+model LetterTemplate {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  name           String
+  body           String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  generated    GeneratedLetter[]
+
+  @@unique([organizationId, name])
+  @@map("letter_templates")
+}
+
+model GeneratedLetter {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  templateId     String?  @db.Uuid
+  employeeId     String?  @db.Uuid
+  /// The merged body is a snapshot — editing the template never rewrites a
+  /// letter that has already been issued.
+  body           String
+  issuedOn       DateTime @db.Date
+  createdAt      DateTime @default(now())
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  template     LetterTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, employeeId])
+  @@map("generated_letters")
+}
+
+/**
+ * ------------------------------------------------------------------- MAIL
+ */
+
+/// USER-scoped: a mail account belongs to one person inside one tenant.
+model MailAccount {
+  id             String    @id @default(uuid()) @db.Uuid
+  organizationId String    @db.Uuid
+  userId         String    @db.Uuid
+  displayName    String
+  email          String
+  provider       String?
+  imapHost       String
+  imapPort       Int       @default(993)
+  imapSecurity   String    @default("SSL/TLS")
+  smtpHost       String
+  smtpPort       Int       @default(587)
+  smtpSecurity   String    @default("STARTTLS")
+  username       String
+  /// Encrypted at rest with the app key — never returned by the API.
+  secretCipher   String?
+  signature      String?
+  isDefault      Boolean   @default(false)
+  lastSyncAt     DateTime?
+  status         String    @default("Not connected")
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages     MailMessage[]
+
+  @@unique([userId, email])
+  @@index([organizationId, userId])
+  @@map("mail_accounts")
+}
+
+model MailMessage {
+  id             String     @id @default(uuid()) @db.Uuid
+  organizationId String     @db.Uuid
+  accountId      String     @db.Uuid
+  /// Conversation grouping key, not a foreign key.
+  threadKey      String
+  folder         MailFolder @default(INBOX)
+  subject        String
+  fromName       String
+  fromEmail      String
+  toJson         Json
+  ccJson         Json?
+  body           String
+  sentAt         DateTime
+  isRead         Boolean    @default(false)
+  isStarred      Boolean    @default(false)
+  isDraft        Boolean    @default(false)
+  labels         String[]
+  /// IMAP UID when synced from a real server; null for locally composed mail.
+  externalUid    String?
+  createdAt      DateTime   @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  account      MailAccount  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([accountId, folder, sentAt])
+  @@index([accountId, threadKey])
+  @@map("mail_messages")
+}
+
+enum MailFolder {
+  INBOX
+  SENT
+  DRAFTS
+  ARCHIVE
+  SPAM
+  TRASH
+}
+
+/**
+ * ---------------------------------------------------------- COLLABORATION
+ */
+
+model Channel {
+  id             String      @id @default(uuid()) @db.Uuid
+  organizationId String      @db.Uuid
+  slug           String
+  name           String
+  description    String?
+  kind           ChannelKind @default(PUBLIC)
+  createdById    String?     @db.Uuid
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  members      ChannelMember[]
+  messages     ChannelMessage[]
+
+  @@unique([organizationId, slug])
+  @@map("channels")
+}
+
+enum ChannelKind {
+  PUBLIC
+  PRIVATE
+  GROUP
+  DIRECT
+}
+
+/// Membership is the authorisation boundary for chat fan-out. The old
+/// WebSocket broadcast ignored this and leaked every message to every client.
+model ChannelMember {
+  channelId  String    @db.Uuid
+  userId     String    @db.Uuid
+  joinedAt   DateTime  @default(now())
+  lastReadAt DateTime?
+
+  channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([channelId, userId])
+  @@index([userId])
+  @@map("channel_members")
+}
+
+model ChannelMessage {
+  id             String    @id @default(uuid()) @db.Uuid
+  organizationId String    @db.Uuid
+  channelId      String    @db.Uuid
+  authorId       String?   @db.Uuid
+  /// Self-referential threading.
+  parentId       String?   @db.Uuid
+  body           String
+  reactions      Json      @default("{}")
+  editedAt       DateTime?
+  createdAt      DateTime  @default(now())
+
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  channel      Channel          @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  /// Nulled rather than cascaded: deleting an account must not erase the
+  /// conversations it took part in.
+  author       User?            @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  parent       ChannelMessage?  @relation("Thread", fields: [parentId], references: [id], onDelete: Cascade)
+  replies      ChannelMessage[] @relation("Thread")
+
+  @@index([channelId, createdAt])
+  @@index([parentId])
+  @@map("channel_messages")
+}
+
+/**
+ * -------------------------------------------------- FILES / CROSS-CUTTING
+ */
+
+/// Polymorphic attachment. `ownerType` + `ownerId` avoid a nullable FK per
+/// module; integrity is enforced in the service layer.
+model Attachment {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  ownerType      String
+  ownerId        String?  @db.Uuid
+  fileName       String
+  mimeType       String
+  sizeBytes      Int
+  storageKey     String
+  uploadedById   String?  @db.Uuid
+  createdAt      DateTime @default(now())
+
+  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  employeeDocs EmployeeDocument[]
+
+  @@index([organizationId, ownerType, ownerId])
+  @@map("attachments")
+}
+
+model Notification {
+  id             String    @id @default(uuid()) @db.Uuid
+  organizationId String    @db.Uuid
+  userId         String    @db.Uuid
+  title          String
+  body           String?
+  kind           String    @default("info")
+  linkTo         String?
+  readAt         DateTime?
+  createdAt      DateTime  @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt])
+  @@map("notifications")
+}
+
+model Todo {
+  id             String    @id @default(uuid()) @db.Uuid
+  organizationId String    @db.Uuid
+  userId         String    @db.Uuid
+  title          String
+  done           Boolean   @default(false)
+  dueOn          DateTime? @db.Date
+  createdAt      DateTime  @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, done])
+  @@map("todos")
+}
+
+model Setting {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  /// Pane slug, e.g. "company", "finance". Values merge rather than replace.
+  key            String
+  value          Json     @default("{}")
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, key])
+  @@map("settings")
+}
+
+/// Append-only. Written by an interceptor, never by domain code.
+model AuditLog {
+  id             String      @id @default(uuid()) @db.Uuid
+  organizationId String      @db.Uuid
+  actorId        String?     @db.Uuid
+  action         AuditAction
+  entity         String
+  entityId       String?
+  summary        String?
+  before         Json?
+  after          Json?
+  ip             String?
+  userAgent      String?
+  createdAt      DateTime    @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  actor        User?        @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@index([organizationId, entity, entityId])
+  @@map("audit_logs")
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  LOGIN
+  LOGOUT
+  APPROVE
+  REJECT
+  PAYMENT
+  EXPORT
+}
+
+/**
+ * ------------------------------------------------------------ SALES
+ * The pre-sale side of CRM: where enquiries arrive and what was sent out.
+ */
+
+model LeadForm {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  name           String
+  slug           String
+  /// Field definitions, as the form builder saved them.
+  fields         Json     @default("[]")
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  submissions  Lead[]
+
+  @@unique([organizationId, slug])
+  @@map("lead_forms")
+}
+
+model LeadEmail {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  leadId         String   @db.Uuid
+  subject        String
+  body           String?
+  toEmail        String
+  sentAt         DateTime @default(now())
+  sentById       String?  @db.Uuid
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  lead         Lead         @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, leadId])
+  @@map("lead_emails")
+}
+
+model Proposal {
+  id             String    @id @default(uuid()) @db.Uuid
+  organizationId String    @db.Uuid
+  /// A proposal goes to a lead, before there is a client to bill.
+  leadId         String?   @db.Uuid
+  number         String
+  title          String?
+  total          Decimal   @default(0) @db.Decimal(14, 2)
+  currency       String    @default("USD")
+  issuedOn       DateTime  @db.Date
+  validUntil     DateTime? @db.Date
+  status         String    @default("Draft")
+  note           String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  lead         Lead?        @relation(fields: [leadId], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, number])
+  @@map("proposals")
+}
+
+/**
+ * ---------------------------------------------------------- FINANCE
+ */
+
+model RecurringInvoice {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  clientId       String?  @db.Uuid
+  amount         Decimal  @default(0) @db.Decimal(14, 2)
+  currency       String   @default("USD")
+  /// Monthly, Quarterly, Yearly.
+  cycle          String   @default("Monthly")
+  startedOn      DateTime @db.Date
+  /// When the scheduler should raise the next one.
+  nextRunOn      DateTime @db.Date
+  /// How many have been raised so far, so the count survives edits.
+  issuedCount    Int      @default(0)
+  status         String   @default("Active")
+  memo           String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  client       Client?      @relation(fields: [clientId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, nextRunOn])
+  @@map("recurring_invoices")
+}
+
+model RecurringExpense {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  item           String
+  category       String?
+  amount         Decimal  @default(0) @db.Decimal(14, 2)
+  currency       String   @default("USD")
+  cycle          String   @default("Monthly")
+  nextRunOn      DateTime @db.Date
+  status         String   @default("Active")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, nextRunOn])
+  @@map("recurring_expenses")
+}
+
+model BankTransaction {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  bankAccountId  String   @db.Uuid
+  /// CREDIT adds to the balance, DEBIT takes from it.
+  direction      String
+  amount         Decimal  @db.Decimal(14, 2)
+  occurredOn     DateTime @db.Date
+  memo           String?
+  /// Set when this row was produced by a payment rather than entered by hand.
+  paymentId      String?  @db.Uuid
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  bankAccount  BankAccount  @relation(fields: [bankAccountId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, bankAccountId, occurredOn])
+  @@map("bank_transactions")
+}
+
+/**
+ * --------------------------------------------------------- PEOPLE OPS
+ */
+
+model Award {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  name           String
+  icon           String   @default("🏆")
+  summary        String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization  Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  appreciations Appreciation[]
+
+  @@unique([organizationId, name])
+  @@map("awards")
+}
+
+model Appreciation {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  awardId        String?  @db.Uuid
+  employeeId     String   @db.Uuid
+  givenById      String?  @db.Uuid
+  awardedOn      DateTime @db.Date
+  note           String?
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  award        Award?       @relation(fields: [awardId], references: [id], onDelete: SetNull)
+  employee     Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, employeeId])
+  @@map("appreciations")
+}
+
+model SalaryChange {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  employeeId     String   @db.Uuid
+  fromAmount     Decimal  @db.Decimal(14, 2)
+  toAmount       Decimal  @db.Decimal(14, 2)
+  effectiveOn    DateTime @db.Date
+  note           String?
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  employee     Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, employeeId, effectiveOn])
+  @@map("salary_changes")
+}
+
+model OvertimeRequest {
+  id             String         @id @default(uuid()) @db.Uuid
+  organizationId String         @db.Uuid
+  employeeId     String         @db.Uuid
+  workedOn       DateTime       @db.Date
+  hours          Decimal        @db.Decimal(5, 2)
+  reason         String?
+  status         ApprovalStatus @default(PENDING)
+  decidedById    String?        @db.Uuid
+  decidedAt      DateTime?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  employee     Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, status])
+  @@map("overtime_requests")
+}
+
+/**
+ * ------------------------------------------------------------- WORK
+ */
+
+model RoadmapIdea {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  title          String
+  detail         String?
+  category       String?
+  status         String   @default("Under Review")
+  createdById    String?  @db.Uuid
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  votes        RoadmapIdeaVote[]
+
+  @@index([organizationId, status])
+  @@map("roadmap_ideas")
+}
+
+/// One vote per person per idea — the count is derived, never stored.
+model RoadmapIdeaVote {
+  ideaId    String   @db.Uuid
+  userId    String   @db.Uuid
+  createdAt DateTime @default(now())
+
+  idea RoadmapIdea @relation(fields: [ideaId], references: [id], onDelete: Cascade)
+  user User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([ideaId, userId])
+  @@map("roadmap_idea_votes")
+}
+
+/**
+ * ------------------------------------------------------- WORKPLACE IT
+ * Assets of the digital kind: links, sites, devices.
+ */
+
+model BioLink {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  name           String
+  slug           String
+  /// The links on the page, in order.
+  links          Json     @default("[]")
+  clicks         Int      @default(0)
+  status         String   @default("Active")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, slug])
+  @@map("bio_links")
+}
+
+model QrCode {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  title          String
+  /// URL, WiFi, WhatsApp, vCard …
+  kind           String   @default("URL")
+  payload        String
+  color          String   @default("#5b5ceb")
+  scans          Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@map("qr_codes")
+}
+
+model Webhook {
+  id             String    @id @default(uuid()) @db.Uuid
+  organizationId String    @db.Uuid
+  name           String
+  url            String
+  /// Which events fire it, e.g. ["invoice.paid"].
+  events         String[]
+  /// Signing secret, encrypted at rest. Never returned to a client.
+  secret         String?
+  status         String    @default("Active")
+  lastFiredAt    DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@map("webhooks")
+}
+
+model Hosting {
+  id             String    @id @default(uuid()) @db.Uuid
+  organizationId String    @db.Uuid
+  title          String
+  provider       String?
+  plan           String?
+  clientId       String?   @db.Uuid
+  status         String    @default("Active")
+  purchasedOn    DateTime? @db.Date
+  expiresOn      DateTime? @db.Date
+  cost           Decimal?  @db.Decimal(14, 2)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  client       Client?      @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  domains      Domain[]
+
+  @@index([organizationId, expiresOn])
+  @@map("hostings")
+}
+
+model Domain {
+  id             String    @id @default(uuid()) @db.Uuid
+  organizationId String    @db.Uuid
+  name           String
+  provider       String?
+  kind           String?
+  clientId       String?   @db.Uuid
+  hostingId      String?   @db.Uuid
+  status         String    @default("Active")
+  purchasedOn    DateTime? @db.Date
+  expiresOn      DateTime? @db.Date
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  client       Client?      @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  hosting      Hosting?     @relation(fields: [hostingId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, expiresOn])
+  @@map("domains")
+}
+
+model BiometricDevice {
+  id             String    @id @default(uuid()) @db.Uuid
+  organizationId String    @db.Uuid
+  name           String
+  serialNumber   String
+  location       String?
+  status         String    @default("Offline")
+  lastSyncAt     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  punches      BiometricPunch[]
+
+  @@unique([organizationId, serialNumber])
+  @@map("biometric_devices")
+}
+
+/// A raw read from a device. Attendance is derived from these, not replaced by them.
+model BiometricPunch {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  deviceId       String   @db.Uuid
+  employeeId     String?  @db.Uuid
+  /// IN or OUT.
+  direction      String
+  punchedAt      DateTime
+  createdAt      DateTime @default(now())
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  device       BiometricDevice @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  employee     Employee?       @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, punchedAt])
+  @@map("biometric_punches")
+}
+
+/**
+ * ------------------------------------------------------ VIRTUAL OFFICE
+ */
+
+model Floor {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  name           String
+  position       Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  rooms        OfficeRoom[]
+
+  @@index([organizationId])
+  @@map("floors")
+}
+
+model OfficeRoom {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  floorId        String   @db.Uuid
+  name           String
+  slug           String
+  /// work · social · quiet · meeting
+  kind           String   @default("work")
+  icon           String   @default("💼")
+  capacity       Int      @default(8)
+  position       Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  floor        Floor        @relation(fields: [floorId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, slug])
+  @@map("office_rooms")
+}
+
+model TeamMeeting {
+  id             String    @id @default(uuid()) @db.Uuid
+  organizationId String    @db.Uuid
+  title          String
+  /// The realtime room key participants join.
+  roomKey        String
+  projectId      String?   @db.Uuid
+  organizerId    String?   @db.Uuid
+  startsAt       DateTime
+  durationMins   Int       @default(30)
+  endedAt        DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  organization Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  project      Project?              @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  attendees    TeamMeetingAttendee[]
+  recordings   Recording[]
+
+  @@unique([organizationId, roomKey])
+  @@index([organizationId, startsAt])
+  @@map("team_meetings")
+}
+
+model TeamMeetingAttendee {
+  meetingId String   @db.Uuid
+  userId    String   @db.Uuid
+  createdAt DateTime @default(now())
+
+  meeting TeamMeeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  user    User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([meetingId, userId])
+  @@index([userId])
+  @@map("team_meeting_attendees")
+}
+
+model Recording {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  meetingId      String?  @db.Uuid
+  title          String
+  roomKey        String
+  /// Opaque key in the file store — never a path the client can choose.
+  storageKey     String
+  sizeBytes      Int      @default(0)
+  durationSecs   Int      @default(0)
+  recordedById   String?  @db.Uuid
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  meeting      TeamMeeting? @relation(fields: [meetingId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@map("recordings")
+}
+
+/**
+ * A one-to-one between an employee and their manager.
+ * Separate from TeamMeeting, which is a video call anyone can join: this is a
+ * scheduled conversation about one person, and it is the performance record.
+ */
+model ReviewMeeting {
+  id             String    @id @default(uuid()) @db.Uuid
+  organizationId String    @db.Uuid
+  employeeId     String    @db.Uuid
+  /// The manager holding the meeting.
+  heldById       String?   @db.Uuid
+  scheduledAt    DateTime
+  durationMins   Int       @default(30)
+  status         String    @default("Upcoming")
+  agenda         String?
+  notes          String?
+  completedAt    DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  employee     Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, scheduledAt])
+  @@map("review_meetings")
+}
+
+/// A reply on a project discussion. The reply count is derived from these.
+model DiscussionReply {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  discussionId   String   @db.Uuid
+  authorId       String?  @db.Uuid
+  body           String
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  discussion   Discussion   @relation(fields: [discussionId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, discussionId])
+  @@map("discussion_replies")
+}

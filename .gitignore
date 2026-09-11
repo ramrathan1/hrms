@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+*.tsbuildinfo
+
+# Environment — these hold real secrets (JWT signing keys, the mail
+# encryption key, database credentials). Never commit them; .env.example
+# in server/ documents what is needed.
+.env
+.env.*
+!.env.example
+
+# Local runtime state
+storage/
+*.log
+
+# Editor and OS noise
+.DS_Store
+.idea/
+.vscode/
+*.swp
