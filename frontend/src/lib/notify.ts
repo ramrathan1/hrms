@@ -14,18 +14,28 @@ export type Notification = {
 
 const KEY = "ws.notifications";
 
-const SEED: Notification[] = [
-  { id: "n1", kind: "task", text: "Lila Lueilwitz logged 4h on DMS-25", detail: "Document management System", to: "/work/timesheets", time: "12 min ago", read: false },
-  { id: "n2", kind: "invoice", text: "INV#017 was sent to Kihn-Schaden", detail: "$7,400.00 · due 10 Sep", to: "/finance/invoices/i8", time: "1 hour ago", read: false },
-  { id: "n3", kind: "leave", text: "Leave request from Kole Johnston is pending", detail: "Casual leave · 03 Sep", to: "/hr/leaves", time: "3 hours ago", read: false },
-  { id: "n4", kind: "deal", text: "Deal “Brand refresh” marked Won", detail: "$7,800.00 · Swan Craft", to: "/deals", time: "Yesterday", read: true },
-  { id: "n5", kind: "ticket", text: "TKT#012 escalated to High priority", detail: "Cannot download invoice PDF", to: "/tickets/TKT%23012", time: "Yesterday", read: true },
-];
+/**
+ * A new workspace has no notifications.
+ *
+ * This list used to open with five invented ones — an invoice for $7,400, a
+ * deal marked Won, a colleague's pending leave. They were demo copy, but they
+ * carried figures and names, sat behind an unread badge on every screen, and
+ * were shown to every role including an employee who may see none of those
+ * records. Notifications now arrive only from real events: `notify.push` and
+ * the realtime hub.
+ */
+const SEED: Notification[] = [];
+
+/** Ids of the demo notifications this store used to ship with. */
+const RETIRED_SEED_IDS = new Set(["n1", "n2", "n3", "n4", "n5"]);
 
 let items: Notification[] = (() => {
   try {
     const raw = localStorage.getItem(KEY);
-    return raw ? (JSON.parse(raw) as Notification[]) : SEED;
+    if (!raw) return SEED;
+    // Anyone who opened the app before carries the old demo rows in storage.
+    // Drop them on read so the invented invoice and deal do not outlive them.
+    return (JSON.parse(raw) as Notification[]).filter((n) => !RETIRED_SEED_IDS.has(n.id));
   } catch {
     return SEED;
   }

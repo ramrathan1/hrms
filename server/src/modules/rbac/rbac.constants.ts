@@ -72,6 +72,13 @@ const SPECIAL_PERMISSIONS: PermissionSeed[] = [
   { key: 'reports:export', module: 'reports', action: 'export', description: 'Export report data' },
   { key: 'mail:manage', module: 'mail', action: 'manage', description: 'Connect and manage mail accounts' },
   { key: 'portal:client', module: 'portal', action: 'client', description: 'Access the client portal' },
+
+  /* Whose records you may read. A module permission says which screen you may
+     open; it cannot say whose data belongs on it. Without these, an employee
+     and their manager both hold `attendance:read` and both see the whole
+     company. See common/self-scope.ts. */
+  { key: 'people:all', module: 'people', action: 'all', description: "Read every person's records, not only your own" },
+  { key: 'people:team', module: 'people', action: 'team', description: "Read your own records and your direct reports'" },
 ];
 
 export const SYSTEM_PERMISSIONS: PermissionSeed[] = [
@@ -116,7 +123,7 @@ export const SYSTEM_ROLES: RoleSeed[] = [
       'knowledge:*', 'performance:*', 'jobs:*', 'applications:*', 'interviews:*',
       'employees:read', 'departments:read', 'attendance:read', 'attendance:clock',
       'leave:read', 'leave:approve', 'reports:read', 'channels:*', 'meetings:*',
-      'mail:manage',
+      'mail:manage', 'people:all',
     ],
   },
   {
@@ -129,6 +136,8 @@ export const SYSTEM_ROLES: RoleSeed[] = [
       'leave:read', 'leave:approve', 'leave:create',
       'tickets:read', 'tickets:update', 'knowledge:read', 'events:read',
       'notices:read', 'performance:read', 'channels:*', 'meetings:*', 'mail:manage',
+      // A team leader's reach is their own team, not the company.
+      'people:team',
     ],
   },
   {
@@ -139,7 +148,7 @@ export const SYSTEM_ROLES: RoleSeed[] = [
       'employees:*', 'departments:*', 'attendance:*', 'leave:*', 'payroll:*',
       'performance:*', 'jobs:*', 'applications:*', 'interviews:*', 'offers:*',
       'letters:*', 'assets:*', 'notices:*', 'events:*', 'knowledge:*',
-      'reports:read', 'channels:*', 'meetings:*', 'mail:manage',
+      'reports:read', 'channels:*', 'meetings:*', 'mail:manage', 'people:all',
     ],
   },
   {
@@ -150,7 +159,7 @@ export const SYSTEM_ROLES: RoleSeed[] = [
       'invoices:*', 'estimates:*', 'payments:*', 'expenses:*', 'payroll:*',
       'clients:read', 'clients:update', 'projects:read',
       'reports:*', 'knowledge:read', 'channels:read', 'mail:manage',
-      'attendance:clock',
+      'attendance:clock', 'people:all',
     ],
   },
   {

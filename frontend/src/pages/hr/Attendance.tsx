@@ -7,9 +7,9 @@ import { StatCard } from "@/components/StatCard";
 import { AttendanceLegend, MONTH_NAMES, YEARS, stateOf } from "@/components/AttendanceCalendar";
 import { AvatarName, Select, StatusPill, Tabs } from "@/components/ui";
 import { employees } from "@/data/core";
-import { daysInMonth } from "@/data/hr";
+import { daysInMonth, shifts } from "@/data/hr";
 import {
-  attendanceToday, clockIn as apiClockIn, clockOut as apiClockOut, loadAttendanceGrid,
+  attendanceToday, can, clockIn as apiClockIn, clockOut as apiClockOut, loadAttendanceGrid,
   markAttendance, type AttendanceGrid,
 } from "@/lib/api";
 import { useToast } from "@/lib/store";
@@ -29,9 +29,15 @@ export default function Attendance() {
   const [clockedIn, setClockedIn] = useState(false);
   const [inAt, setInAt] = useState<string | null>(null);
   const [outAt, setOutAt] = useState<string | null>(null);
+  const [onLeaveToday, setOnLeaveToday] = useState<{ on: boolean; label: string | null }>({
+    on: false,
+    label: null,
+  });
   const [markOpen, setMarkOpen] = useState(false);
   const [grid, setGrid] = useState<AttendanceGrid | null>(null);
   const [loading, setLoading] = useState(true);
+  // Undefined until the organisation has configured a shift; the badge hides.
+  const myShift = shifts[0] as { name: string; start: string; end: string } | undefined;
 
   /* Whether I'm clocked in is the server's answer, not this tab's memory —
      otherwise clocking in on a phone leaves the desktop offering "Clock In". */
@@ -40,6 +46,7 @@ export default function Attendance() {
       setClockedIn(t.clockedIn);
       setInAt(t.in);
       setOutAt(t.out);
+      setOnLeaveToday({ on: t.onLeave, label: t.leaveLabel });
     });
 
   useEffect(() => {
@@ -59,9 +66,13 @@ export default function Attendance() {
     };
   }, [monthIdx, yearNum]);
 
-  /* One row per employee in the chosen department, in the grid's order. */
+  /* One row per employee the grid came back with, in the chosen department.
+     Driving this from the local employee list instead meant the grid listed
+     every colleague even when the server had scoped the data to one person —
+     rows of empty cells under other people's names. */
   const byEmployee = new Map((grid?.rows ?? []).map((r) => [r.employeeId, r]));
   const rows = employees
+    .filter((e) => byEmployee.has(e.id))
     .filter((e) => dept === "All" || e.department === dept)
     .map((e) => ({ ...e, att: byEmployee.get(e.id)?.days ?? [] }));
 
@@ -101,9 +112,14 @@ export default function Attendance() {
         crumbs={["HR"]}
         actions={
           <>
-            <button className="btn-outline" onClick={() => setMarkOpen(true)}>
-              Mark attendance
-            </button>
+            {/* Correcting someone else's record is an HR action the server
+                gates on attendance:update. Without this check the control was
+                offered to everyone and answered with a 403 nobody saw. */}
+            {can("attendance:update") && (
+              <button className="btn-outline" onClick={() => setMarkOpen(true)}>
+                Mark attendance
+              </button>
+            )}
             <button
               className="btn-outline"
               onClick={() => {
@@ -133,16 +149,36 @@ export default function Attendance() {
           <div>
             <p className="font-display text-[15px] font-bold">My attendance · Today</p>
             <p className="text-sm text-muted">
-              {inAt ? `Clocked in ${inAt}` : "Not clocked in yet"}
+              {onLeaveToday.on && !inAt
+                ? `On approved ${(onLeaveToday.label ?? "leave").toLowerCase()} leave today`
+                : inAt
+                  ? `Clocked in ${inAt}`
+                  : "Not clocked in yet"}
               {outAt ? ` · Clocked out ${outAt}` : clockedIn ? " · Working now" : ""}
             </p>
           </div>
         </div>
-        <span className="flex items-center gap-1.5 rounded-full bg-page px-3 py-1.5 text-xs text-muted">
-          <MapPin size={12} /> Worksuite HQ · General Shift 09:00–18:00
-        </span>
+        {/* Named from the configured shift. It used to read "Worksuite HQ ·
+            General Shift 09:00–18:00" whether or not a single shift existed,
+            which is a working day the employee never agreed to. */}
+        {myShift && (
+          <span className="flex items-center gap-1.5 rounded-full bg-page px-3 py-1.5 text-xs text-muted">
+            <MapPin size={12} /> {myShift.name} {myShift.start}–{myShift.end}
+          </span>
+        )}
         <div className="ml-auto flex gap-2">
-          {!clockedIn ? (
+          {/* Once the day is closed there is nothing left to press. The button
+              used to flip back to "Clock In", which sent a second request the
+              server answered with 409 and the page never mentioned. */}
+          {outAt ? (
+            <span className="rounded-lg bg-page px-4 py-2 text-sm font-semibold text-muted">Day complete</span>
+          ) : onLeaveToday.on && !clockedIn ? (
+            /* A day off is not a day to clock in on. The button used to be live
+               and the server answered the press with a refusal. */
+            <span className="flex items-center gap-2 rounded-lg bg-warn-soft px-4 py-2 text-sm font-semibold text-[#a9720e]">
+              <Plane size={15} /> On leave today
+            </span>
+          ) : !clockedIn ? (
             <button className="btn-primary" onClick={clockIn}>
               <LogIn size={15} /> Clock In
             </button>
@@ -155,7 +191,7 @@ export default function Attendance() {
       </div>
 
       <div className="mb-5 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard label="Present days" value={present} icon={Check} sub="this month, all staff" />
+        <StatCard label="Present days" value={present} icon={Check} sub={can("attendance:update") ? "this month, all staff" : "this month"} />
         <StatCard label="Absent days" value={absent} icon={X} />
         <StatCard label="Late arrivals" value={late} icon={Clock} />
         <StatCard label="On leave" value={onLeave} icon={Plane} />

@@ -1,5 +1,7 @@
 import { type ReactNode } from "react";
 import { Link } from "react-router-dom";
+import { roleById } from "@/lib/roles";
+import { useRole } from "@/lib/store";
 
 export function PageHeader({
   title,
@@ -10,12 +12,17 @@ export function PageHeader({
   crumbs?: string[];
   actions?: ReactNode;
 }) {
+  /* "Home" used to point at /dashboard for everyone. Only some roles can open
+     it, so for an employee the breadcrumb on every screen led to the "not part
+     of this portal" wall. Send each role to its own landing page instead. */
+  const home = roleById(useRole().roleId).home;
+
   return (
     <div className="sticky top-0 z-20 -mx-6 -mt-6 mb-5 flex flex-wrap items-center justify-between gap-3 border-b border-line/80 bg-white/60 px-6 py-3.5 backdrop-blur-xl">
       <div className="flex items-baseline gap-3">
         <h1 className="text-lg font-bold">{title}</h1>
         <nav className="hidden items-center gap-1.5 text-xs text-faint sm:flex">
-          <Link to="/dashboard" className="hover:text-primary">
+          <Link to={home} className="hover:text-primary">
             Home
           </Link>
           {[...crumbs, title].map((c, i) => (

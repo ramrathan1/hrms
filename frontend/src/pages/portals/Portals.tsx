@@ -21,7 +21,8 @@ import { mailMessages } from "@/data/mail";
 import { fmtDate, money, todayISO } from "@/lib/format";
 import { CURRENT_USER } from "@/lib/store";
 import { roleById } from "@/lib/roles";
-import { loadAttendanceGrid } from "@/lib/api";
+import { loadAttendanceGrid, loadOutToday, type OutToday } from "@/lib/api";
+import { useStoreVersion } from "@/lib/useStoreVersion";
 
 const TODAY = todayISO();
 const overdue = (t: { due?: string; status?: string }) =>
@@ -135,6 +136,10 @@ const selfPlaceholder = () => ({
 });
 
 export function EmployeePortal() {
+  /* These tiles are computed from the shared collections, which are plain
+     arrays — subscribe so a figure cannot sit stale while the data behind
+     it changes. */
+  useStoreVersion();
   /* The signed-in person's own HR record. Falling back to the first employee
      would show someone else's work as yours, so stand in a minimal record
      built from the session instead. */
@@ -156,7 +161,20 @@ export function EmployeePortal() {
       live = false;
     };
   }, [me.id]);
-  const myProjects = projects.filter((p) => p.members.includes(me.id));
+  // Colleagues on approved leave today — names and dates, nothing more.
+  const [outToday, setOutToday] = useState<OutToday[]>([]);
+  useEffect(() => {
+    void loadOutToday().then(setOutToday);
+  }, []);
+
+  /* Membership is not the only way onto a project: being handed a task on one
+     puts you on it as far as the person doing the work is concerned. Counting
+     only members is why this panel said "You're not on a project yet" while
+     Work → Projects listed the project the employee's own task belonged to. */
+  const myProjectIds = new Set(myTasks.map((t) => t.projectId).filter(Boolean));
+  const myProjects = projects.filter(
+    (p) => p.members.includes(me.id) || myProjectIds.has(p.id)
+  );
   const unread = mailMessages.filter((m) => !m.read && m.folderId === "inbox").length;
 
   return (
@@ -208,6 +226,23 @@ export function EmployeePortal() {
           />
         </Panel>
 
+        {/* Who is off today. An employee cannot see the leave list — those
+            carry reasons — but does need to know who is around. */}
+        <Panel title="Out today">
+          <Rows
+            empty="Everyone is in today"
+            items={outToday.map((o) => ({
+              key: o.id,
+              left: <AvatarName name={o.employeeName} sub={o.employeeCode} />,
+              right: (
+                <span className="text-xs text-muted">
+                  {o.halfDay ? "Half day" : `Back ${fmtDate(String(o.endsOn).slice(0, 10))}`}
+                </span>
+              ),
+            }))}
+          />
+        </Panel>
+
         <Panel title="My projects" to="/work/projects">
           <Rows
             empty="You're not on a project yet"
@@ -248,6 +283,10 @@ export function EmployeePortal() {
 /* ---------------------------------------------------------------- Team Lead */
 
 export function TeamLeaderPortal() {
+  /* These tiles are computed from the shared collections, which are plain
+     arrays — subscribe so a figure cannot sit stale while the data behind
+     it changes. */
+  useStoreVersion();
   /* The signed-in person's own HR record. Falling back to the first employee
      would show someone else's work as yours, so stand in a minimal record
      built from the session instead. */
@@ -349,6 +388,10 @@ export function TeamLeaderPortal() {
 /* --------------------------------------------------------------------- HR */
 
 export function HrPortal() {
+  /* These tiles are computed from the shared collections, which are plain
+     arrays — subscribe so a figure cannot sit stale while the data behind
+     it changes. */
+  useStoreVersion();
   const active = employees.filter((e) => e.status === "Active");
   const pendingLeave = leaves.filter((l) => l.status === "Pending");
   const onLeaveToday = leaves.filter((l) => l.status === "Approved" && (l.date) === TODAY);
@@ -442,6 +485,10 @@ export function HrPortal() {
 /* -------------------------------------------------------------- Accountant */
 
 export function AccountantPortal() {
+  /* These tiles are computed from the shared collections, which are plain
+     arrays — subscribe so a figure cannot sit stale while the data behind
+     it changes. */
+  useStoreVersion();
   const billed = invoices.reduce((a, i) => a + (i.total ?? 0), 0);
   const collected = invoices.reduce((a, i) => a + (i.paid ?? 0), 0);
   const outstanding = billed - collected;
@@ -540,6 +587,10 @@ export function AccountantPortal() {
 /* ----------------------------------------------------------------- Manager */
 
 export function ManagerPortal() {
+  /* These tiles are computed from the shared collections, which are plain
+     arrays — subscribe so a figure cannot sit stale while the data behind
+     it changes. */
+  useStoreVersion();
   const activeProjects = projects.filter((p) => p.status === "In Progress");
   const atRisk = projects.filter((p) => p.deadline < TODAY && p.progress < 100);
   const openTickets = tickets.filter((t) => t.status === "Open" || t.status === "Pending");
@@ -642,6 +693,10 @@ export function ManagerPortal() {
 /* ------------------------------------------------------------------- Owner */
 
 export function OwnerPortal() {
+  /* These tiles are computed from the shared collections, which are plain
+     arrays — subscribe so a figure cannot sit stale while the data behind
+     it changes. */
+  useStoreVersion();
   const billed = invoices.reduce((a, i) => a + (i.total ?? 0), 0);
   const collected = invoices.reduce((a, i) => a + (i.paid ?? 0), 0);
   const spend = expenses.filter((e) => e.status !== "Rejected").reduce((a, e) => a + (e.price), 0);

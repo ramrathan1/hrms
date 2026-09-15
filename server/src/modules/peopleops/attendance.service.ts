@@ -2,11 +2,13 @@ import { Injectable } from '@nestjs/common';
 
 import { BaseCrudService } from '../../common/services/base-crud.service';
 import { PrismaService } from '../../infra/prisma/prisma.service';
-import { ConflictError, NotFoundError } from '../../common/errors/domain.error';
+import { ConflictError, ForbiddenError, NotFoundError } from '../../common/errors/domain.error';
 import { getTenantContext, orgScope } from '../../infra/tenant/tenant-context';
 import type {
   AttendanceQueryDto, ClockDto, MarkAttendanceDto, MonthlyGridQueryDto,
 } from './dto/peopleops.dto';
+import { isWeeklyOff } from '../../common/work-calendar';
+import { currentUserId, employeeScope, employeeSelfScope, holdsAny } from '../../common/self-scope';
 
 type Row = { id: string };
 
@@ -22,6 +24,13 @@ type Row = { id: string };
 export class AttendanceService extends BaseCrudService<Row> {
   constructor(prisma: PrismaService) {
     super(prisma, 'attendanceRecord', ['note'], ['workDate', 'createdAt'], 'Attendance record');
+  }
+
+  /* When somebody arrived and left is their record, not the office's. HR and
+     managers see everyone, a team leader their team, everyone else their own —
+     on the list and on a read by id alike. */
+  protected override scopeFilter() {
+    return employeeScope();
   }
 
   protected override buildFilters(query: AttendanceQueryDto) {
@@ -60,6 +69,19 @@ export class AttendanceService extends BaseCrudService<Row> {
       throw new ConflictError(
         'ALREADY_CLOCKED_IN',
         `Already clocked in today at ${existing.clockInAt.toISOString().slice(11, 16)}`,
+      );
+    }
+
+    /* A day cannot be both taken as leave and worked. Clocking in on approved
+       leave wrote a PRESENT — or, past the grace period, a LATE — onto a day
+       the same database says the person is off, and the two records then
+       disagree about whether they were at work. A half day is left alone:
+       that is exactly the case where somebody works the other half. */
+    const leave = await this.fullDayLeaveOn(employee.id, workDate);
+    if (leave) {
+      throw new ConflictError(
+        'ON_APPROVED_LEAVE',
+        'You are on approved leave today. Cancel the leave first if you are working.',
       );
     }
 
@@ -112,13 +134,20 @@ export class AttendanceService extends BaseCrudService<Row> {
   async today(employeeId?: string) {
     const employee = await this.resolveEmployee(employeeId);
     const workDate = startOfDay(new Date());
-    const record = await this.prisma.db.attendanceRecord.findFirst({
-      where: { employeeId: employee.id, workDate },
-    });
+    const [record, leave] = await Promise.all([
+      this.prisma.db.attendanceRecord.findFirst({
+        where: { employeeId: employee.id, workDate },
+      }),
+      this.fullDayLeaveOn(employee.id, workDate),
+    ]);
     return {
       employeeId: employee.id,
       workDate,
       clockedIn: Boolean(record?.clockInAt && !record?.clockOutAt),
+      // So the screen can say why the button is unavailable, instead of
+      // offering it and answering the press with an error.
+      onLeave: Boolean(leave),
+      leaveLabel: leave?.leaveType?.name ?? null,
       record,
     };
   }
@@ -170,6 +199,9 @@ export class AttendanceService extends BaseCrudService<Row> {
         where: {
           status: 'ACTIVE',
           ...(query.departmentId ? { departmentId: query.departmentId } : {}),
+          /* Whose rows this grid shows. Correcting attendance is HR's job and
+             a right over other people's records, not a screen permission. */
+          ...employeeSelfScope(),
         },
         select: { id: true, name: true, employeeCode: true, departmentId: true },
         orderBy: { name: 'asc' },
@@ -209,13 +241,12 @@ export class AttendanceService extends BaseCrudService<Row> {
 
       for (let d = 1; d <= dayCount; d++) {
         const date = new Date(Date.UTC(year, month - 1, d));
-        const dow = date.getUTCDay();
         const key = recordKey(employee.id, d);
         const record = byKey.get(key);
 
         let status: string;
         if (record) status = record.status;
-        else if (dow === 0 || dow === 6) status = 'WEEKEND';
+        else if (isWeeklyOff(date)) status = 'WEEKEND';
         else if (holidayDays.has(d)) status = 'HOLIDAY';
         else if (onLeave.has(key)) status = 'ON_LEAVE';
         else if (date > today) status = 'PENDING';
@@ -250,6 +281,16 @@ export class AttendanceService extends BaseCrudService<Row> {
     if (employeeId) {
       const employee = await this.prisma.db.employee.findFirst({ where: { id: employeeId } });
       if (!employee) throw new NotFoundError('Employee', employeeId);
+
+      /* Clocking somebody else in is falsifying their attendance, and the id
+         arrives in the request body — so it cannot be taken on trust. Correcting
+         another person's record is HR's job and carries attendance:update. */
+      if (employee.userId !== currentUserId() && !holdsAny('attendance:update')) {
+        throw new ForbiddenError(
+          'You can only clock yourself in and out.',
+          'NOT_YOUR_ATTENDANCE',
+        );
+      }
       return employee;
     }
     const ctx = getTenantContext();
@@ -260,6 +301,20 @@ export class AttendanceService extends BaseCrudService<Row> {
       );
     }
     return own;
+  }
+
+  /** Approved leave covering a whole working day, if there is one. */
+  private async fullDayLeaveOn(employeeId: string, workDate: Date) {
+    return this.prisma.db.leaveRequest.findFirst({
+      where: {
+        employeeId,
+        status: 'APPROVED',
+        halfDay: false,
+        startsOn: { lte: workDate },
+        endsOn: { gte: workDate },
+      },
+      select: { id: true, startsOn: true, endsOn: true, leaveType: { select: { name: true } } },
+    });
   }
 
   /** Late is a shift rule, not a guess: after the shift start plus grace. */

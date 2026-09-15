@@ -71,6 +71,20 @@ export abstract class BaseCrudService<TModel extends { id: string }> {
     return {};
   }
 
+  /**
+   * Which rows this caller may reach at all — not a filter they asked for.
+   *
+   * Separate from `buildFilters` because it applies to reads by id as well as
+   * to lists. Scoping only the list leaves the detail route open: the ids are
+   * in plain sight on every screen, and `update`/`remove` read through
+   * `findOne` too, so an unscoped read is also an unscoped write.
+   *
+   * Override per module; see common/self-scope.ts for the shared rule.
+   */
+  protected scopeFilter(): Record<string, unknown> {
+    return {};
+  }
+
   /** Relations to include on list. Override per module. */
   protected listInclude(): Record<string, unknown> | undefined {
     return undefined;
@@ -82,13 +96,20 @@ export abstract class BaseCrudService<TModel extends { id: string }> {
   }
 
   async findAll(query: PaginationQueryDto): Promise<Paginated<TModel>> {
-    const where: Record<string, unknown> = { ...this.buildFilters(query) };
-
+    /* Kept as separate AND clauses rather than merged into one object: a
+       module filter and a search both want `OR`, and spreading them together
+       silently drops one of them. */
+    const clauses = [this.scopeFilter(), this.buildFilters(query)];
     if (query.q && this.searchableFields.length) {
-      where.OR = this.searchableFields.map((field) => ({
-        [field]: { contains: query.q, mode: 'insensitive' },
-      }));
+      clauses.push({
+        OR: this.searchableFields.map((field) => ({
+          [field]: { contains: query.q, mode: 'insensitive' },
+        })),
+      });
     }
+    const used = clauses.filter((clause) => Object.keys(clause).length > 0);
+    const where: Record<string, unknown> =
+      used.length === 0 ? {} : used.length === 1 ? used[0] : { AND: used };
 
     const orderBy = this.buildOrderBy(query.sortBy, query.sortOrder);
 
@@ -109,8 +130,11 @@ export abstract class BaseCrudService<TModel extends { id: string }> {
   }
 
   async findOne(id: string): Promise<TModel> {
+    const scope = this.scopeFilter();
     const found = await this.model.findFirst({
-      where: { id },
+      // A record you may not see reads as one that is not there, which is also
+      // what stops the 404/403 difference from confirming it exists.
+      where: Object.keys(scope).length ? { AND: [{ id }, scope] } : { id },
       include: this.detailInclude(),
     });
     if (!found) throw new NotFoundError(this.entityLabel, id);

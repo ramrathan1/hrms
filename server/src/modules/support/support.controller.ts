@@ -33,8 +33,10 @@ export class TicketsController {
     return this.tickets.updateTicket(id, dto);
   }
 
+  /* Reading the ticket is the bar; the service decides who may write —
+     an agent, or the person who raised it. */
   @Post(':id/replies')
-  @RequirePermissions('tickets:update')
+  @RequirePermissions('tickets:read')
   @ApiOperation({ summary: 'Reply; a public reply reopens a resolved ticket' })
   reply(@Param('id', ParseUUIDPipe) id: string, @Body() dto: CreateReplyDto) {
     return this.tickets.reply(id, dto);

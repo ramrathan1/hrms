@@ -1,5 +1,6 @@
 import { Plus } from "lucide-react";
 import { CalendarMonth } from "@/components/CalendarMonth";
+import { can } from "@/lib/api";
 import { useCrud } from "@/components/crud";
 import { PageHeader } from "@/components/PageHeader";
 import { DataTable } from "@/components/DataTable";
@@ -7,7 +8,16 @@ import { holidays } from "@/data/hr";
 import { fmtDate } from "@/lib/format";
 import { useToast } from "@/lib/store";
 
-const seed = holidays.map((h, i) => ({ id: `hd${i + 1}`, ...h }));
+/* The demo rows carry no id, which useCrud and the store both key on. Stamp
+   them onto the shared array in place instead of mapping into a new one: a
+   copy is frozen at module load, so the server's list — empty or not — could
+   never replace it, and the page went on showing four holidays that no longer
+   existed anywhere. */
+type Holiday = { id: string; date: string; name: string };
+const seed = holidays as unknown as Holiday[];
+seed.forEach((h, i) => {
+  if (!h.id) h.id = `hd${i + 1}`;
+});
 
 export default function Holidays() {
   const { push } = useToast();
@@ -27,6 +37,7 @@ export default function Holidays() {
         title="Holiday"
         crumbs={["HR"]}
         actions={
+          can("attendance:create") ? (
           <>
             <button className="btn-primary" onClick={crud.openNew}>
               <Plus size={15} /> Add Holiday
@@ -47,6 +58,7 @@ export default function Holidays() {
               Mark Default Holidays
             </button>
           </>
+          ) : undefined
         }
       />
       <div className="mb-5">

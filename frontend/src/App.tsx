@@ -11,6 +11,7 @@ import ClientPortal from "@/pages/ClientPortal";
 import PrivateDashboard from "@/pages/dashboard/Private";
 import AdvancedDashboard from "@/pages/dashboard/Advanced";
 import CalendarPage from "@/pages/CalendarPage";
+import Profile from "@/pages/Profile";
 import Approvals from "@/pages/Approvals";
 import AuditLog from "@/pages/AuditLog";
 
@@ -156,6 +157,7 @@ export default function App() {
         <Route path="/dashboard" element={<PrivateDashboard />} />
         <Route path="/dashboard/advanced" element={<AdvancedDashboard />} />
         <Route path="/calendar" element={<CalendarPage />} />
+        <Route path="/profile" element={<Profile />} />
         <Route path="/approvals" element={<Approvals />} />
         <Route path="/audit" element={<AuditLog />} />
 

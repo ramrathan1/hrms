@@ -2,15 +2,17 @@ import { Download, Plus, UserPlus } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { DataTable } from "@/components/DataTable";
-import { useCrud } from "@/components/crud";
+import { FormModal, useCrud } from "@/components/crud";
 import { FilterBar, PageHeader } from "@/components/PageHeader";
 import { AvatarName, SearchInput, Select, StatusPill } from "@/components/ui";
 import { employees } from "@/data/core";
+import { can, inviteUser } from "@/lib/api";
 import { useToast } from "@/lib/store";
 
 export default function Employees() {
   const [q, setQ] = useState("");
   const [dept, setDept] = useState("All");
+  const [inviteOpen, setInviteOpen] = useState(false);
   const nav = useNavigate();
   const { push } = useToast();
   const crud = useCrud({
@@ -43,9 +45,14 @@ export default function Employees() {
             <Link to="/hr/employees/new" className="btn-primary">
               <Plus size={15} /> Add Employee
             </Link>
-            <button className="btn-outline" onClick={() => push("Invite email queued — configure SMTP in Settings → Notifications")}>
-              <UserPlus size={15} /> Invite Employee
-            </button>
+            {/* Creating a sign-in is an Owner power, and the server enforces
+                that. Offering the button to everyone else only produces a 403
+                after they have filled the form in. */}
+            {can("users:create") && (
+              <button className="btn-outline" onClick={() => setInviteOpen(true)}>
+                <UserPlus size={15} /> Invite Employee
+              </button>
+            )}
             <button
               className="btn-outline"
               onClick={() => {
@@ -82,6 +89,30 @@ export default function Employees() {
         rowActions={(e) => crud.rowActions(e)}
       />
       {crud.modals}
+      <FormModal
+        open={inviteOpen}
+        title="Invite Employee"
+        submitLabel="Send Invite"
+        fields={[
+          { key: "name", label: "Full Name", required: true },
+          { key: "email", label: "Email", required: true },
+          { key: "password", label: "Initial Password", required: true },
+          { key: "role", label: "Role", type: "select", options: ["EMPLOYEE", "TEAM_LEADER", "MANAGER", "HR", "ACCOUNTANT"] },
+        ]}
+        initial={{ role: "EMPLOYEE" }}
+        onSubmit={async (v) => {
+          setInviteOpen(false);
+          const ok = await inviteUser({
+            name: String(v.name ?? ""),
+            email: String(v.email ?? ""),
+            password: String(v.password ?? ""),
+            roles: [String(v.role || "EMPLOYEE")],
+          });
+          // A failure has already announced its own reason through the API layer.
+          if (ok) push(`${v.email} can now sign in`);
+        }}
+        onClose={() => setInviteOpen(false)}
+      />
     </>
   );
 }

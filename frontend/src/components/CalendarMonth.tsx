@@ -78,8 +78,16 @@ export function CalendarMonth({
         </ul>
       ) : (
         <div className="grid grid-cols-7">
-          {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => (
-            <div key={d} className="border-b border-line px-2 py-2 text-center text-xs font-semibold text-muted">
+          {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d, i) => (
+            <div
+              key={d}
+              className={clsx(
+                "border-b border-line px-2 py-2 text-center text-xs font-semibold",
+                // Sunday is the weekly off for everyone, so the column reads as
+                // non-working rather than looking like any other day.
+                i === 0 ? "bg-page text-faint" : "text-muted"
+              )}
+            >
               {d}
             </div>
           ))}
@@ -88,6 +96,7 @@ export function CalendarMonth({
             const key = iso(d);
             const evs = byDate.get(key) ?? [];
             const isToday = key === iso(TODAY);
+            const isWeeklyOff = d.getDay() === 0;
             return (
               <div
                 key={i}
@@ -96,6 +105,7 @@ export function CalendarMonth({
                   "group relative border-r border-b border-line/70 p-1.5",
                   compact ? "min-h-16" : "min-h-24",
                   !inMonth && "bg-page/60",
+                  isWeeklyOff && inMonth && "bg-page",
                   isToday && "bg-primary-soft",
                   onDayClick && "cursor-pointer hover:bg-primary-soft/60"
                 )}
@@ -105,7 +115,7 @@ export function CalendarMonth({
                     + Add
                   </span>
                 )}
-                <div className={clsx("mb-1 text-right text-xs tabular-nums", inMonth ? "text-muted" : "text-faint", isToday && "font-bold text-primary")}>
+                <div className={clsx("mb-1 text-right text-xs tabular-nums", inMonth && !isWeeklyOff ? "text-muted" : "text-faint", isToday && "font-bold text-primary")}>
                   {d.getDate()}
                 </div>
                 <div className="flex flex-col gap-1">

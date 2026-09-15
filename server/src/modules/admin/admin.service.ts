@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { Prisma } from '../../generated/prisma/client';
 
 import { PrismaService } from '../../infra/prisma/prisma.service';
+import { currentUserId, holdsAny, peopleScope } from '../../common/self-scope';
 import { CacheService } from '../../infra/cache/cache.service';
 import { ConflictError, NotFoundError } from '../../common/errors/domain.error';
 import { getTenantContext, orgScope } from '../../infra/tenant/tenant-context';
@@ -320,15 +321,69 @@ export class ReportsService {
     if (!term) return [];
 
     const like = { contains: term, mode: 'insensitive' as const };
+    const none = Promise.resolve([] as never[]);
+
+    /* Search used to run every branch for everyone, so it answered questions
+       the screens themselves refuse: an employee typing a name found invoices,
+       leads and colleagues' tickets. Each branch now asks the same two
+       questions the list endpoints ask — may you read this module, and whose
+       records may you see. */
+    const mine = peopleScope() !== 'all';
+    const userId = currentUserId();
 
     const [employees, clients, projects, tasks, invoices, leads, tickets] = await Promise.all([
-      this.prisma.db.employee.findMany({ where: { name: like }, take: limit, select: { id: true, name: true, employeeCode: true } }),
-      this.prisma.db.client.findMany({ where: { OR: [{ name: like }, { company: like }] }, take: limit, select: { id: true, name: true, company: true } }),
-      this.prisma.db.project.findMany({ where: { OR: [{ name: like }, { code: like }] }, take: limit, select: { id: true, name: true, code: true } }),
-      this.prisma.db.task.findMany({ where: { OR: [{ title: like }, { code: like }] }, take: limit, select: { id: true, title: true, code: true } }),
-      this.prisma.db.invoice.findMany({ where: { number: like }, take: limit, select: { id: true, number: true, status: true } }),
-      this.prisma.db.lead.findMany({ where: { OR: [{ name: like }, { company: like }] }, take: limit, select: { id: true, name: true, company: true } }),
-      this.prisma.db.ticket.findMany({ where: { OR: [{ subject: like }, { number: like }] }, take: limit, select: { id: true, subject: true, number: true } }),
+      holdsAny('employees:read')
+        ? this.prisma.db.employee.findMany({ where: { name: like }, take: limit, select: { id: true, name: true, employeeCode: true } })
+        : none,
+      holdsAny('clients:read')
+        ? this.prisma.db.client.findMany({ where: { OR: [{ name: like }, { company: like }] }, take: limit, select: { id: true, name: true, company: true } })
+        : none,
+      holdsAny('projects:read')
+        ? this.prisma.db.project.findMany({
+            where: {
+              OR: [{ name: like }, { code: like }],
+              ...(mine ? { members: { some: { userId } } } : {}),
+            },
+            take: limit,
+            select: { id: true, name: true, code: true },
+          })
+        : none,
+      holdsAny('tasks:read')
+        ? this.prisma.db.task.findMany({
+            where: {
+              OR: [{ title: like }, { code: like }],
+              ...(mine
+                ? {
+                    AND: [{
+                      OR: [
+                        { assignees: { some: { userId } } },
+                        { createdById: userId },
+                        { project: { members: { some: { userId } } } },
+                      ],
+                    }],
+                  }
+                : {}),
+            },
+            take: limit,
+            select: { id: true, title: true, code: true },
+          })
+        : none,
+      holdsAny('invoices:read')
+        ? this.prisma.db.invoice.findMany({ where: { number: like }, take: limit, select: { id: true, number: true, status: true } })
+        : none,
+      holdsAny('leads:read')
+        ? this.prisma.db.lead.findMany({ where: { OR: [{ name: like }, { company: like }] }, take: limit, select: { id: true, name: true, company: true } })
+        : none,
+      holdsAny('tickets:read')
+        ? this.prisma.db.ticket.findMany({
+            where: {
+              OR: [{ subject: like }, { number: like }],
+              ...(holdsAny('tickets:update') ? {} : { createdById: userId }),
+            },
+            take: limit,
+            select: { id: true, subject: true, number: true },
+          })
+        : none,
     ]);
 
     return [
@@ -341,6 +396,7 @@ export class ReportsService {
       ...tickets.map((t) => ({ type: 'Ticket', id: t.id, label: t.subject, sub: t.number, to: `/tickets/${t.id}` })),
     ];
   }
+
 }
 
 const round2 = (n: number) => Math.round(n * 100) / 100;

@@ -7,11 +7,24 @@ import {
   BusinessRuleError, ConflictError, ForbiddenError, NotFoundError,
 } from '../../common/errors/domain.error';
 import { getTenantContext, orgScope } from '../../infra/tenant/tenant-context';
+import { countWorkingDays, startOfUtcDay } from '../../common/work-calendar';
+import { employeeScope } from '../../common/self-scope';
 import type {
   CreateLeaveDto, DecideLeaveDto, LeaveQueryDto, UpdateLeaveDto,
 } from './dto/peopleops.dto';
 
 type Row = { id: string };
+
+/** Whoever may approve leave may also read all of it. */
+function canDecideLeave(): boolean {
+  const ctx = getTenantContext();
+  if (!ctx) return true; // jobs and the seed run unscoped on purpose
+  return (
+    ctx.permissions.includes('*') ||
+    ctx.permissions.includes('leave:*') ||
+    ctx.permissions.includes('leave:approve')
+  );
+}
 
 /**
  * Leave.
@@ -38,7 +51,15 @@ export class LeaveService extends BaseCrudService<Row> {
         ...(query.to ? { lte: new Date(query.to) } : {}),
       };
     }
+
     return where;
+  }
+
+  /* A request carries a reason — why somebody is off work — so this is not
+     company-wide reading, whatever the query string asks for. Who is out
+     *today* is a separate, deliberately thinner view: `outToday()`. */
+  protected override scopeFilter() {
+    return employeeScope();
   }
 
   protected override listInclude() {
@@ -91,6 +112,44 @@ export class LeaveService extends BaseCrudService<Row> {
         };
       }),
     );
+  }
+
+  /**
+   * Who is off work on a given day.
+   *
+   * Deliberately thin: a name and the dates, nothing else. Knowing a colleague
+   * is out today is ordinary working information — you need it to know whether
+   * to expect a reply. Why they are out is not, so no reason, no leave type and
+   * no status beyond the fact that it was approved.
+   */
+  async outToday(on?: string) {
+    const day = startOfUtcDay(on ? new Date(on) : new Date());
+
+    const rows = await this.prisma.db.leaveRequest.findMany({
+      where: {
+        status: 'APPROVED',
+        startsOn: { lte: day },
+        endsOn: { gte: day },
+      },
+      select: {
+        id: true,
+        startsOn: true,
+        endsOn: true,
+        halfDay: true,
+        employee: { select: { id: true, name: true, employeeCode: true } },
+      },
+      orderBy: { startsOn: 'asc' },
+    });
+
+    return rows.map((r) => ({
+      id: r.id,
+      employeeId: r.employee?.id ?? null,
+      employeeName: r.employee?.name ?? '',
+      employeeCode: r.employee?.employeeCode ?? '',
+      startsOn: r.startsOn,
+      endsOn: r.endsOn,
+      halfDay: r.halfDay,
+    }));
   }
 
   /** The employee record behind a login, if there is one. */
@@ -153,6 +212,38 @@ export class LeaveService extends BaseCrudService<Row> {
    * editing the payload or racing a second tab.
    */
   async request(dto: CreateLeaveDto) {
+    /* Leave is applied for by the person taking it. Filing on someone else's
+       behalf is an HR action, and leave:create alone is not it — without the
+       right to decide leave you could otherwise spend a colleague's balance
+       for them, which is exactly what this used to allow. */
+    if (!canDecideLeave()) {
+      const ctx = getTenantContext();
+      const own = ctx ? await this.employeeIdForUser(ctx.userId) : null;
+      if (!own) {
+        throw new ForbiddenError(
+          'Your account is not linked to an employee record, so leave cannot be requested for it.',
+          'NO_EMPLOYEE_RECORD',
+        );
+      }
+      if (dto.employeeId !== own) {
+        throw new ForbiddenError(
+          'You can only request leave for yourself.',
+          'NOT_YOUR_LEAVE',
+        );
+      }
+
+      /* Leave is asked for ahead of time. Recording an absence that has already
+         happened is a correction to the record, which is HR's to make — so the
+         date floor is enforced here as well as in the picker, which is only a
+         hint a request can skip. */
+      if (startOfUtcDay(new Date(dto.startsOn)) < startOfUtcDay(new Date())) {
+        throw new BusinessRuleError(
+          'LEAVE_IN_THE_PAST',
+          'Leave cannot start in the past. Ask HR to record absences that have already happened.',
+        );
+      }
+    }
+
     const startsOn = new Date(dto.startsOn);
     const endsOn = new Date(dto.endsOn ?? dto.startsOn);
 
@@ -160,9 +251,26 @@ export class LeaveService extends BaseCrudService<Row> {
       throw new BusinessRuleError('INVALID_RANGE', 'The end date cannot be before the start date');
     }
 
-    const days = dto.halfDay ? 0.5 : countDays(startsOn, endsOn);
     if (dto.halfDay && startsOn.getTime() !== endsOn.getTime()) {
       throw new BusinessRuleError('INVALID_HALF_DAY', 'A half day must start and end on the same date');
+    }
+
+    /* Sundays and public holidays inside the range are not spent: they were
+       never working days. Counting raw calendar days meant a Friday-to-Monday
+       request cost four days of entitlement instead of two. */
+    const publicHolidays = await this.prisma.db.holiday.findMany({
+      where: { holidayOn: { gte: startOfUtcDay(startsOn), lte: startOfUtcDay(endsOn) } },
+      select: { holidayOn: true },
+    });
+    const days = dto.halfDay
+      ? 0.5
+      : countWorkingDays(startsOn, endsOn, publicHolidays.map((h) => h.holidayOn));
+
+    if (days === 0) {
+      throw new BusinessRuleError(
+        'NO_WORKING_DAYS',
+        'Those dates are already non-working — a Sunday or a public holiday. No leave is needed.',
+      );
     }
 
     const year = startsOn.getFullYear();
@@ -362,11 +470,5 @@ export class LeaveService extends BaseCrudService<Row> {
 }
 
 /* ---------------------------------------------------------------- helpers */
-
-/** Inclusive whole-day count, weekends included — holidays are a separate rule. */
-function countDays(from: Date, to: Date): number {
-  const ms = to.getTime() - from.getTime();
-  return Math.floor(ms / 86_400_000) + 1;
-}
 
 const round1 = (n: number) => Math.round(n * 10) / 10;

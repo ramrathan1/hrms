@@ -2,6 +2,7 @@ import { Plus } from "lucide-react";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { DataTable } from "@/components/DataTable";
+import { peopleOptions } from "@/lib/people";
 import { useCrud } from "@/components/crud";
 import { DurationFilter, FilterBar, PageHeader } from "@/components/PageHeader";
 import { AvatarName, SearchInput, Select, StatusPill } from "@/components/ui";
@@ -9,11 +10,18 @@ import { byId, clients, employees } from "@/data/core";
 import { tickets } from "@/data/ops";
 import { fmtDate, todayISO } from "@/lib/format";
 import { CURRENT_USER, useToast } from "@/lib/store";
+import { can } from "@/lib/api";
 
 export default function Tickets() {
   const [status, setStatus] = useState("All");
   const [q, setQ] = useState("");
   const { push } = useToast();
+
+  /* Who may act as the support desk. Running the queue — logging a ticket for
+     somebody else, assigning an agent, setting a status — carries
+     tickets:update. Everyone else raises tickets about their own problems. */
+  const mayManage = can("tickets:update");
+  const myName = byId(CURRENT_USER.id)?.name ?? CURRENT_USER.name;
   const nav = useNavigate();
   const crud = useCrud({
     collection: "tickets",
@@ -23,14 +31,33 @@ export default function Tickets() {
     makeId: (its) => `TKT#${String(its.length + 8).padStart(3, "0")}`,
     fields: [
       { key: "subject", label: "Subject", required: true, span: true },
-      { key: "requester", label: "Requester", type: "select", options: clients.map((c) => c.name), required: true },
-      { key: "agent", label: "Agent", type: "select", options: employees.map((e) => ({ value: e.id, label: e.name })) },
+      { key: "body", label: "What happened?", type: "textarea", span: true, placeholder: "Anything that helps whoever picks this up" },
+      /* Requester is who reported it — a client for a customer ticket, a
+         colleague for an internal one. It used to be a required list of
+         clients, so with no clients on file nobody could raise a ticket at
+         all. You raise your own; the desk may raise one for anyone. */
+      ...(mayManage
+        ? [{
+            key: "requester",
+            label: "Requester",
+            type: "select" as const,
+            options: [...clients.map((c) => c.name), ...employees.map((e) => e.name)],
+          }]
+        : []),
+      // The agent is who will work the ticket. The desk assigns it; leaving it
+      // unset means "unassigned", which is the honest state for a new report.
+      ...(mayManage
+        ? [{ key: "agent", label: "Agent", type: "select" as const, options: peopleOptions("tickets:update") }]
+        : []),
       { key: "priority", label: "Priority", type: "select", options: ["High", "Medium", "Low"] },
       { key: "group", label: "Assign Group", type: "select", options: ["Technical", "Billing", "Legal"] },
       { key: "type", label: "Type", type: "select", options: ["Question", "Problem", "Request"] },
-      { key: "status", label: "Status", type: "select", options: ["Open", "Pending", "Resolved", "Closed"] },
+      ...(mayManage
+        ? [{ key: "status", label: "Status", type: "select" as const, options: ["Open", "Pending", "Resolved", "Closed"] }]
+        : []),
     ],
-    defaults: { updated: todayISO(), priority: "Medium", status: "Open" } as never,
+    // A ticket you raise is about you, and it starts Open.
+    defaults: { updated: todayISO(), priority: "Medium", status: "Open", requester: myName } as never,
   });
   const rows = crud.items.filter(
     (t) => (status === "All" || t.status === status) && (t.subject + t.number).toLowerCase().includes(q.toLowerCase())
