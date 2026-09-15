@@ -12,7 +12,6 @@ import {
   MonthlyGridQueryDto, UpdateHolidayDto, UpdateLeaveTypeDto, UpdateShiftDto,
 } from './dto/peopleops.dto';
 import { RequirePermissions } from '../../common/decorators/permissions.decorator';
-import { requireTenantContext } from '../../infra/tenant/tenant-context';
 import { PaginationQueryDto } from '../../common/dto/pagination.dto';
 
 @ApiTags('Leave')
@@ -28,23 +27,15 @@ export class LeaveController {
   @RequirePermissions('leave:read')
   @ApiOperation({ summary: 'Entitlement per type — quota, used, pending, remaining' })
   async balances(@Query() query: BalanceQueryDto) {
-    const ctx = requireTenantContext();
-    const canSeeEveryone =
-      ctx.permissions.includes('*') ||
-      ctx.permissions.includes('leave:approve') ||
-      ctx.permissions.includes('leave:*');
+    // Whose entitlement you may see follows peopleScope() — everyone, your
+    // team, or yourself — exactly as attendance does. Approving leave is a
+    // separate right: a team leader approves for their team, so seeing the
+    // whole company's balances would reach past it.
+    const rows = await this.leave.allBalances(query.year);
 
-    // Somebody's entitlement is their business. Without approval rights you
-    // get your own, whatever the query string asks for.
-    if (!canSeeEveryone) {
-      const own = await this.leave.employeeIdForUser(ctx.userId);
-      return own ? this.leave.balances(own, query.year) : [];
-    }
-
-    // No employee named: the whole company, which is what the HR screen wants.
-    return query.employeeId
-      ? this.leave.balances(query.employeeId, query.year)
-      : this.leave.allBalances(query.year);
+    // Naming an employee narrows the list; it can never widen it, because the
+    // rows were already limited to the caller's reach.
+    return query.employeeId ? rows.filter((r) => r.employeeId === query.employeeId) : rows;
   }
 
   @Get('out-today')

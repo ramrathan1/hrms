@@ -8,7 +8,7 @@ import {
 } from '../../common/errors/domain.error';
 import { getTenantContext, orgScope } from '../../infra/tenant/tenant-context';
 import { countWorkingDays, startOfUtcDay } from '../../common/work-calendar';
-import { employeeScope } from '../../common/self-scope';
+import { employeeScope, employeeSelfScope } from '../../common/self-scope';
 import type {
   CreateLeaveDto, DecideLeaveDto, LeaveQueryDto, UpdateLeaveDto,
 } from './dto/peopleops.dto';
@@ -80,7 +80,8 @@ export class LeaveService extends BaseCrudService<Row> {
   async allBalances(year = new Date().getFullYear()) {
     const [employees, types, balances] = await Promise.all([
       this.prisma.db.employee.findMany({
-        where: { status: { not: 'EXITED' } },
+        // Same reach as attendance: everyone, your team, or just you.
+        where: { status: { not: 'EXITED' }, ...employeeSelfScope() },
         select: { id: true, name: true },
         orderBy: { name: 'asc' },
       }),
@@ -159,49 +160,6 @@ export class LeaveService extends BaseCrudService<Row> {
       select: { id: true },
     });
     return employee?.id ?? null;
-  }
-
-  /**
-   * Remaining entitlement per type for one employee in a given year.
-   *
-   * Same row shape as `allBalances`, deliberately: the caller of
-   * `/leave/balances` gets one list or the other depending on what they may
-   * see, and a client should not have to tell which it received.
-   */
-  async balances(employeeId: string, year = new Date().getFullYear()) {
-    const [employee, types, balances] = await Promise.all([
-      this.prisma.db.employee.findFirst({
-        where: { id: employeeId },
-        select: { id: true, name: true },
-      }),
-      this.prisma.db.leaveType.findMany({ orderBy: { name: 'asc' } }),
-      this.prisma.db.leaveBalance.findMany({ where: { employeeId, year } }),
-    ]);
-
-    const byType = new Map(balances.map((b) => [b.leaveTypeId, b]));
-
-    return types.map((type) => {
-      const row = byType.get(type.id);
-      const quota = Number(row?.quota ?? type.defaultQuota);
-      const used = Number(row?.used ?? 0);
-      const pending = Number(row?.pending ?? 0);
-      return {
-        // A balance that has never been written has no row of its own, but the
-        // list still needs a stable key.
-        id: row?.id ?? `${employeeId}:${type.id}`,
-        employeeId,
-        employeeName: employee?.name ?? '',
-        leaveTypeId: type.id,
-        name: type.name,
-        paid: type.paid,
-        quota,
-        used,
-        pending,
-        // Pending requests hold entitlement, so two requests cannot both be
-        // approved against the same remaining day.
-        remaining: round1(Math.max(0, quota - used - pending)),
-      };
-    });
   }
 
   /* ---------------------------------------------------------- request */
