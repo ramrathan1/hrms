@@ -13,6 +13,9 @@
  * yet and keeps working off the seed data in `@/data`.
  */
 
+import { clients, employees } from "@/data/core";
+import { leaveTypeIdFor } from "@/lib/leaveBalance";
+
 type Row = Record<string, any>;
 
 /* ------------------------------------------------------------- primitives */
@@ -136,6 +139,23 @@ export type Adapter = {
 const defined = (row: Row): Row =>
   Object.fromEntries(Object.entries(row).filter(([, v]) => v !== undefined));
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * A reference to another employee, on its way to the server.
+ *
+ * The form's picker is a list of names with "--" at the top, because
+ * SelectInput carries strings; an edit loaded from the server carries the id
+ * instead. The API wants a UUID or nothing, and "--" is neither — sending it
+ * raw is what made the first employee impossible to create on an empty
+ * database, since "nobody to report to" was the only option available.
+ */
+const employeeRef = (value: unknown): string | undefined => {
+  if (typeof value !== "string" || !value || value === "--") return undefined;
+  if (UUID.test(value)) return value;
+  return employees.find((e) => e.name === value)?.id;
+};
+
 /**
  * A date on its way to the server.
  *
@@ -178,7 +198,7 @@ export const ADAPTERS: Record<string, Adapter> = {
         phone: p.phone,
         departmentId: p.departmentId,
         designationId: p.designationId,
-        reportsToId: p.reportsTo,
+        reportsToId: employeeRef(p.reportsTo),
         joinedOn: dateOut(p.joined),
         hourlyRate: p.hourly,
         status: p.status ? (p.status === "Active" ? "ACTIVE" : "INACTIVE") : undefined,
@@ -560,7 +580,9 @@ export const ADAPTERS: Record<string, Adapter> = {
     toServer: (p) =>
       defined({
         employeeId: p.employee,
-        leaveTypeId: p.leaveTypeId,
+        // The pickers carry a type name; the API keys leave by type id. Fall
+        // back to resolving the name so every entry point agrees.
+        leaveTypeId: p.leaveTypeId ?? leaveTypeIdFor(String(p.type ?? "")),
         startsOn: dateOut(p.date),
         endsOn: dateOut(p.endDate ?? p.date),
         halfDay: p.duration === "Half Day" ? true : undefined,
@@ -726,7 +748,13 @@ export const ADAPTERS: Record<string, Adapter> = {
       defined({
         subject: p.subject,
         body: p.body,
-        clientId: p.clientId,
+        /* Picking a client as the requester should attach the ticket to that
+           customer, not just copy their name into a text field — otherwise it
+           never shows up against the client record. An internal requester is a
+           colleague, so there is no client to link. */
+        clientId:
+          p.clientId ??
+          clients.find((c) => c.name === p.requester)?.id,
         requesterName: p.requester,
         assigneeId: p.agent ? asUser(p.agent) : undefined,
         priority: p.priority ? scream(p.priority) : undefined,

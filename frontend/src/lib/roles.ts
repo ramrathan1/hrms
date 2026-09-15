@@ -48,7 +48,7 @@ export const ROLES: RoleDef[] = [
     blurb: "Owns delivery across projects, clients and the people on them.",
     home: "/portal/manager",
     allow: [
-      "/portal/manager", "/dashboard", "/calendar", "/approvals", "/mail", "/office", "/meet",
+      "/portal/manager", "/profile", "/dashboard", "/calendar", "/approvals", "/mail", "/office", "/meet",
       "/chat", "/leads", "/deals", "/lead-forms", "/clients", "/work", "/roadmap",
       "/hr/employees", "/hr/leaves", "/hr/attendance", "/hr/shifts", "/hr/holidays",
       "/tickets", "/events", "/notices", "/knowledge", "/performance", "/recruit", "/reports",
@@ -96,7 +96,7 @@ export const ROLES: RoleDef[] = [
     blurb: "My work, my time, my leave. Nothing company-wide.",
     home: "/portal/me",
     allow: [
-      "/portal/me", "/calendar", "/mail", "/office", "/meet", "/chat",
+      "/portal/me", "/profile", "/calendar", "/mail", "/office", "/meet", "/chat",
       "/work/tasks", "/work/timesheets", "/work/projects",
       "/hr/leaves", "/hr/attendance", "/hr/holidays",
       "/tickets", "/knowledge", "/events", "/notices",
@@ -108,7 +108,7 @@ export const ROLES: RoleDef[] = [
     label: "Client",
     blurb: "An outside customer: their projects, invoices and tickets only.",
     home: "/portal/client",
-    allow: ["/portal/client", "/portal/", "/mail", "/tickets", "/knowledge"],
+    allow: ["/portal/client", "/portal/", "/profile", "/mail", "/tickets", "/knowledge"],
     accent: "#e5554a",
   },
 ];
@@ -136,6 +136,20 @@ export function roleIdFromKeys(keys: string[] | undefined): RoleId {
   const held = new Set((keys ?? []).map((k) => k.toUpperCase()));
   for (const [key, role] of KEY_TO_ROLE) if (held.has(key)) return role;
   return "employee";
+}
+
+/**
+ * Every portal this account may view, widest first.
+ *
+ * The role switcher offers this list. It used to offer all seven to everyone,
+ * so an employee could put the shell into Owner and see a sidebar full of
+ * payroll and finance they cannot open — the server refuses each route, but the
+ * app should not have offered them in the first place.
+ */
+export function roleIdsFromKeys(keys: string[] | undefined): RoleId[] {
+  const held = new Set((keys ?? []).map((k) => k.toUpperCase()));
+  const mine = KEY_TO_ROLE.filter(([key]) => held.has(key)).map(([, role]) => role);
+  return mine.length ? mine : ["employee"];
 }
 
 /** Map the free-text role stored on an employee record onto a RoleId. */

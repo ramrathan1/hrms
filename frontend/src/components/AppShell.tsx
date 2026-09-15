@@ -197,7 +197,13 @@ function GlobalSearch({ asInput }: { asInput?: boolean }) {
     ["Attendance", "/hr/attendance"], ["Deals", "/deals"], ["Tickets", "/tickets"],
     ["Payroll", "/payroll"], ["Reports", "/reports"], ["Settings", "/settings/company"],
   ] as const;
-  const pages = targets.filter(([t]) => t.toLowerCase().includes(q.toLowerCase()));
+  /* Only destinations this role can actually open. Offering "Invoices" to an
+     employee sent them to the "not part of this portal" wall from a control
+     that looked like navigation. */
+  const searchRole = roleById(useRole().roleId);
+  const pages = targets.filter(
+    ([t, to]) => t.toLowerCase().includes(q.toLowerCase()) && canAccess(searchRole, to)
+  );
 
   // ⌘K / Ctrl-K opens search anywhere
   useEffect(() => {
@@ -336,6 +342,8 @@ export function AppShell() {
   const [navOpen, setNavOpen] = useState(false);
   const user = useRole();
   const role = roleById(user.roleId);
+  // The portals this account may view — the switcher lists only these.
+  const myRoles = ROLES.filter((r) => (user.roleIds ?? [user.roleId]).includes(r.id));
 
   /* The sidebar shows only what this role can open. A parent survives if it or
      any of its children is allowed, and the children are filtered too. */
@@ -491,23 +499,30 @@ export function AppShell() {
               </button>
             }
             items={[
-              { label: <span className="text-[11px] font-bold tracking-wider text-faint uppercase">Switch role</span> },
-              ...ROLES.map((r) => ({
-                label: (
-                  <span className="flex items-center gap-2">
-                    <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: r.accent }} />
-                    <span className={clsx("flex-1", r.id === role.id && "font-semibold text-primary")}>{r.label}</span>
-                    {r.id === role.id && <Check size={13} className="text-primary" />}
-                  </span>
-                ),
-                onClick: () => {
-                  setRole(r.id, r.label);
-                  push(`Now viewing as ${r.label}`);
-                  nav(r.home);
-                },
-              })),
-              { label: <span className="my-1 block h-px bg-line" /> },
-              { label: "My Profile", onClick: () => nav(`/hr/employees/${CURRENT_USER.id}`) },
+              /* Only the portals this account actually holds. Someone with a
+                 single role has nothing to switch between, so the section is
+                 left out entirely rather than listing six they cannot open. */
+              ...(myRoles.length > 1
+                ? [
+                    { label: <span className="text-[11px] font-bold tracking-wider text-faint uppercase">Switch role</span> },
+                    ...myRoles.map((r) => ({
+                      label: (
+                        <span className="flex items-center gap-2">
+                          <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: r.accent }} />
+                          <span className={clsx("flex-1", r.id === role.id && "font-semibold text-primary")}>{r.label}</span>
+                          {r.id === role.id && <Check size={13} className="text-primary" />}
+                        </span>
+                      ),
+                      onClick: () => {
+                        setRole(r.id, r.label);
+                        push(`Now viewing as ${r.label}`);
+                        nav(r.home);
+                      },
+                    })),
+                    { label: <span className="my-1 block h-px bg-line" /> },
+                  ]
+                : []),
+              { label: "My Profile", onClick: () => nav("/profile") },
               { label: "Settings", onClick: () => nav("/settings/company") },
               { label: "Log out", danger: true, onClick: () => { logout(); nav("/login"); } },
             ]}

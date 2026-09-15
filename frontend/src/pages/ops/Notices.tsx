@@ -1,5 +1,6 @@
 import { Plus } from "lucide-react";
 import { DataTable } from "@/components/DataTable";
+import { can } from "@/lib/api";
 import { useCrud } from "@/components/crud";
 import { PageHeader } from "@/components/PageHeader";
 import { StatusPill } from "@/components/ui";
@@ -24,9 +25,11 @@ export default function Notices() {
       <PageHeader
         title="Notice Board"
         actions={
-          <button className="btn-primary" onClick={crud.openNew}>
-            <Plus size={15} /> Add Notice
-          </button>
+          can("notices:create") ? (
+            <button className="btn-primary" onClick={crud.openNew}>
+              <Plus size={15} /> Add Notice
+            </button>
+          ) : undefined
         }
       />
       <DataTable

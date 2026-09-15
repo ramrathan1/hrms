@@ -32,9 +32,31 @@ export class MailMessagesService {
    * conversations and not messages — otherwise page two can repeat a thread that
    * straddled the boundary.
    */
+  /**
+   * The caller's own mail, and nobody else's.
+   *
+   * A message has no user of its own — it hangs off MailAccount, which the
+   * tenant guard already narrows to the signed-in person. So the accounts are
+   * read first and used as the filter: without this, one person's inbox was
+   * readable by every colleague holding `mail:manage`, which is everyone.
+   */
+  private async myAccountIds(): Promise<string[]> {
+    const accounts = await this.prisma.db.mailAccount.findMany({ select: { id: true } });
+    return accounts.map((a) => a.id);
+  }
+
+  private async mine(accountId?: string): Promise<Record<string, unknown>> {
+    const ids = await this.myAccountIds();
+    // An accountId that is not yours narrows to nothing rather than widening.
+    const scoped = accountId ? ids.filter((id) => id === accountId) : ids;
+    return { accountId: { in: scoped } };
+  }
+
   async threads(query: ThreadQueryDto) {
-    const where: Record<string, unknown> = { folder: query.folder ?? 'INBOX' };
-    if (query.accountId) where.accountId = query.accountId;
+    const where: Record<string, unknown> = {
+      folder: query.folder ?? 'INBOX',
+      ...(await this.mine(query.accountId)),
+    };
     if (query.starred === 'true') where.isStarred = true;
     if (query.unread === 'true') where.isRead = false;
     if (query.label) where.labels = { has: query.label };
@@ -101,7 +123,7 @@ export class MailMessagesService {
   /** Every message in one conversation, oldest first. */
   async thread(threadKey: string, accountId?: string) {
     const messages = await this.prisma.db.mailMessage.findMany({
-      where: { threadKey, ...(accountId ? { accountId } : {}) },
+      where: { threadKey, ...(await this.mine(accountId)) },
       orderBy: { sentAt: 'asc' },
     });
     if (!messages.length) throw new NotFoundError('Conversation', threadKey);
@@ -109,8 +131,7 @@ export class MailMessagesService {
   }
 
   async findAll(query: MessageQueryDto) {
-    const where: Record<string, unknown> = {};
-    if (query.accountId) where.accountId = query.accountId;
+    const where: Record<string, unknown> = { ...(await this.mine(query.accountId)) };
     if (query.folder) where.folder = query.folder;
     if (query.threadKey) where.threadKey = query.threadKey;
 
@@ -130,7 +151,7 @@ export class MailMessagesService {
   async folderCounts(accountId?: string) {
     const grouped = await this.prisma.db.mailMessage.groupBy({
       by: ['folder'],
-      where: { isRead: false, ...(accountId ? { accountId } : {}) },
+      where: { isRead: false, ...(await this.mine(accountId)) },
       _count: { _all: true },
     });
     return Object.fromEntries(grouped.map((g) => [g.folder, g._count._all]));
@@ -146,7 +167,7 @@ export class MailMessagesService {
       throw new BusinessRuleError('NOTHING_TO_UPDATE', 'Set isRead or isStarred');
     }
     const res = await this.prisma.db.mailMessage.updateMany({
-      where: { id: { in: dto.messageIds } },
+      where: { id: { in: dto.messageIds }, ...(await this.mine()) },
       data,
     });
     return { updated: res.count };
@@ -154,7 +175,7 @@ export class MailMessagesService {
 
   async move(dto: MoveMessagesDto) {
     const res = await this.prisma.db.mailMessage.updateMany({
-      where: { id: { in: dto.messageIds } },
+      where: { id: { in: dto.messageIds }, ...(await this.mine()) },
       data: { folder: dto.folder },
     });
     return { moved: res.count, folder: dto.folder };
@@ -163,7 +184,7 @@ export class MailMessagesService {
   /** Trash first, delete for good on a second pass — as a mail client behaves. */
   async remove(messageIds: string[]) {
     const messages = await this.prisma.db.mailMessage.findMany({
-      where: { id: { in: messageIds } },
+      where: { id: { in: messageIds }, ...(await this.mine()) },
       select: { id: true, folder: true },
     });
 

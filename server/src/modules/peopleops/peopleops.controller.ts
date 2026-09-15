@@ -47,6 +47,16 @@ export class LeaveController {
       : this.leave.allBalances(query.year);
   }
 
+  @Get('out-today')
+  @RequirePermissions('leave:read')
+  @ApiOperation({
+    summary: 'Who is on approved leave today',
+    description:
+      'Names and dates only — no reason and no leave type. Anyone may see that ' +
+      'a colleague is off work; why they are off is between them and HR.',
+  })
+  outToday(@Query('on') on?: string) { return this.leave.outToday(on); }
+
   @Get(':id') @RequirePermissions('leave:read')
   findOne(@Param('id', ParseUUIDPipe) id: string) { return this.leave.findOne(id); }
 

@@ -11,9 +11,11 @@ import { TaskQuickCreate } from "@/components/TaskQuickCreate";
 import { Avatar, Dropdown, Modal } from "@/components/ui";
 import { channelMessages as seedMessages, channels, type Channel, type ChannelMessage } from "@/data/collab";
 import { employees } from "@/data/core";
-import { api, loadMessages } from "@/lib/api";
+import { api, isBacked, loadMessages, onStoreChange } from "@/lib/api";
 import { CURRENT_USER, useToast } from "@/lib/store";
 import { wsc } from "@/lib/ws";
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const EMOJIS = ["👍", "✅", "🎉", "❤️", "👀", "🔥"];
 
@@ -141,6 +143,12 @@ export default function Chat() {
   const NO_CHANNEL: Channel = { id: "", name: "", desc: "" };
   const channel = chans.find((c) => c.id === activeId) ?? chans[0] ?? NO_CHANNEL;
 
+  /* Follow the shared collection. Without this the page kept the copy it took
+     at mount — which on a workspace with no channels is the bundled demo list,
+     whose ids ("general", "engineering") are names rather than the UUIDs the
+     API keys channels by. Every transcript fetch then came back 400. */
+  useEffect(() => onStoreChange(() => setChans([...channels])), []);
+
   const commitChans = (next: Channel[]) => {
     setChans(next);
     channels.splice(0, channels.length, ...next);
@@ -190,6 +198,11 @@ export default function Chat() {
      channel. */
   useEffect(() => {
     if (!activeId || activeId.startsWith("dm-")) return;
+    /* Once channels are server-backed their ids are UUIDs. The demo list this
+       page starts from uses names ("general"), and it is still in hand during
+       the moment between boot and the channel pull — asking the API for one of
+       those is a guaranteed 400, so wait for a real id. */
+    if (isBacked("channels") && !UUID.test(activeId)) return;
     let live = true;
     wsc.send({ type: "chat:subscribe", channelId: activeId });
     void loadMessages(activeId).then((rows) => {
@@ -203,7 +216,7 @@ export default function Chat() {
     return () => {
       live = false;
     };
-  }, [activeId]);
+  }, [activeId, chans]);
 
   /* The store inserts newest-first; a transcript reads oldest-first. */
   const byTime = (a: ChannelMessage, b: ChannelMessage) => String(a.time).localeCompare(String(b.time));
@@ -610,7 +623,9 @@ export default function Chat() {
           void api.remove("channels", channel.id);
           push(`${channel.group ? "Group" : "#" + channel.name} deleted`);
           setDeleting(false);
-          setParams({ c: "general" });
+          // Fall to whatever channel is left, not a name that may not exist.
+          const next = chans.find((c) => c.id !== channel.id);
+          setParams(next ? { c: next.id } : {});
         }}
         onClose={() => setDeleting(false)}
       />

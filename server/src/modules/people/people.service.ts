@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { Prisma } from '../../generated/prisma/client';
 
 import { BaseCrudService } from '../../common/services/base-crud.service';
+import { employeeScope } from '../../common/self-scope';
 import { PrismaService } from '../../infra/prisma/prisma.service';
 import { BusinessRuleError, ConflictError, ForbiddenError, NotFoundError } from '../../common/errors/domain.error';
 import { orgScope, requireTenantContext } from '../../infra/tenant/tenant-context';
@@ -33,6 +34,10 @@ export class SalariesService extends BaseCrudService<Row> {
 
   protected override buildFilters(query: SalaryQueryDto) {
     return query.employeeId ? { employeeId: query.employeeId } : {};
+  }
+
+  protected override scopeFilter() {
+    return employeeScope();
   }
 
   protected override listInclude() {
@@ -117,6 +122,10 @@ export class SalaryChangesService extends BaseCrudService<Row> {
     return query.employeeId ? { employeeId: query.employeeId } : {};
   }
 
+  protected override scopeFilter() {
+    return employeeScope();
+  }
+
   protected override listInclude() {
     return { employee: { select: { id: true, name: true } } };
   }
@@ -135,6 +144,10 @@ export class PayslipsService extends BaseCrudService<Row> {
     if (query.employeeId) where.employeeId = query.employeeId;
     if (query.status) where.status = query.status;
     return where;
+  }
+
+  protected override scopeFilter() {
+    return employeeScope();
   }
 
   protected override listInclude() {
@@ -222,6 +235,10 @@ export class OvertimeService extends BaseCrudService<Row> {
     return where;
   }
 
+  protected override scopeFilter() {
+    return employeeScope();
+  }
+
   protected override listInclude() {
     return { employee: { select: { id: true, name: true, employeeCode: true } } };
   }
@@ -283,6 +300,18 @@ export class OvertimeService extends BaseCrudService<Row> {
 export class ObjectivesService extends BaseCrudService<Row> {
   constructor(prisma: PrismaService) {
     super(prisma, 'objective', ['title', 'description'], ['periodEnd', 'createdAt'], 'Objective');
+  }
+
+  /* An objective belongs to one person; a colleague's goals are not yours
+     to read. `employeeId` is nullable — a company-wide objective has none. */
+  protected override buildFilters(query: EmployeeScopedQueryDto) {
+    return query.employeeId ? { employeeId: query.employeeId } : {};
+  }
+
+  protected override scopeFilter() {
+    const scope = employeeScope();
+    // `employeeId` is nullable — a company-wide objective belongs to no one.
+    return Object.keys(scope).length ? { OR: [scope, { employeeId: null }] } : {};
   }
 
   protected override listInclude() {
@@ -400,6 +429,10 @@ export class ReviewMeetingsService extends BaseCrudService<Row> {
     return where;
   }
 
+  protected override scopeFilter() {
+    return employeeScope();
+  }
+
   protected override listInclude() {
     return { employee: { select: { id: true, name: true, employeeCode: true } } };
   }
@@ -488,6 +521,10 @@ export class AppreciationsService extends BaseCrudService<Row> {
     return query.employeeId ? { employeeId: query.employeeId } : {};
   }
 
+  protected override scopeFilter() {
+    return employeeScope();
+  }
+
   protected override listInclude() {
     return {
       employee: { select: { id: true, name: true } },
@@ -518,6 +555,10 @@ export class EmergencyContactsService extends BaseCrudService<Row> {
 
   protected override buildFilters(query: EmployeeScopedQueryDto) {
     return query.employeeId ? { employeeId: query.employeeId } : {};
+  }
+
+  protected override scopeFilter() {
+    return employeeScope();
   }
 
   /**
@@ -572,6 +613,10 @@ export class EmployeeDocumentsService extends BaseCrudService<Row> {
 
   protected override buildFilters(query: EmployeeScopedQueryDto) {
     return query.employeeId ? { employeeId: query.employeeId } : {};
+  }
+
+  protected override scopeFilter() {
+    return employeeScope();
   }
 
   protected override listInclude() {

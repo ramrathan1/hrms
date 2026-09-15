@@ -1319,6 +1319,9 @@ model Ticket {
   body           String?
   clientId       String?      @db.Uuid
   requesterName  String?
+  /// Who raised it. A requester may follow up on their own ticket without
+  /// holding tickets:update, so ownership has to be a fact, not a name match.
+  createdById    String?      @db.Uuid
   assigneeId     String?      @db.Uuid
   priority       TaskPriority @default(MEDIUM)
   status         TicketStatus @default(OPEN)

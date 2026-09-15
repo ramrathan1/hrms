@@ -6,6 +6,8 @@ import {
 import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { CalendarMonth } from "@/components/CalendarMonth";
+import { peopleOptions } from "@/lib/people";
+import { can } from "@/lib/api";
 import { FormModal, useCrud, type RowAction } from "@/components/crud";
 import { Kanban } from "@/components/Kanban";
 import { DurationFilter, FilterBar, PageHeader } from "@/components/PageHeader";
@@ -271,7 +273,7 @@ export default function Tasks() {
     fields: [
       { key: "title", label: "Title", required: true, span: true },
       { key: "projectId", label: "Project", type: "select", options: projects.map((p) => ({ value: p.id, label: p.name.slice(0, 40) })) },
-      { key: "assignee", label: "Assigned To", type: "select", options: employees.map((e) => ({ value: e.id, label: e.name })) },
+      { key: "assignee", label: "Assigned To", type: "select", options: peopleOptions("tasks:create") },
       { key: "due", label: "Due Date", type: "date", required: true },
       { key: "priority", label: "Priority", type: "select", options: ["High", "Medium", "Low"] },
       { key: "status", label: "Status", type: "select", options: GROUPS.map((g) => ({ value: g.id, label: g.title })) },
@@ -305,9 +307,11 @@ export default function Tasks() {
         crumbs={["Work"]}
         actions={
           <>
-            <button className="btn-primary" onClick={() => setParams({ new: "1" })}>
-              <Plus size={15} /> Add Task
-            </button>
+            {can("tasks:create") && (
+              <button className="btn-primary" onClick={() => setParams({ new: "1" })}>
+                <Plus size={15} /> Add Task
+              </button>
+            )}
             <div className="flex overflow-hidden rounded-[10px] border border-line bg-white/70">
               {([["list", List], ["board", KanbanIcon], ["calendar", CalendarDays]] as const).map(([v, Icon]) => (
                 <button
@@ -347,9 +351,11 @@ export default function Tasks() {
                   <span className="h-2.5 w-2.5 rounded-[4px]" style={{ background: g.color }} />
                   <span className="font-display text-[14px] font-bold">{g.title}</span>
                   <span className="text-sm text-faint tabular-nums">{groupRows.length}</span>
-                  <button className="btn-ghost ml-auto gap-1 px-2 py-1 text-xs" onClick={() => setParams({ new: "1" })}>
-                    <Plus size={13} /> Add Task
-                  </button>
+                  {can("tasks:create") && (
+                    <button className="btn-ghost ml-auto gap-1 px-2 py-1 text-xs" onClick={() => setParams({ new: "1" })}>
+                      <Plus size={13} /> Add Task
+                    </button>
+                  )}
                 </div>
                 {!isCollapsed && (
                   <div className="overflow-x-auto">
@@ -457,7 +463,7 @@ export default function Tasks() {
         fields={[
           { key: "title", label: "Title", required: true, span: true },
           { key: "projectId", label: "Project", type: "select", options: projects.map((p) => ({ value: p.id, label: p.name.slice(0, 40) })) },
-          { key: "assignee", label: "Assigned To", type: "select", options: employees.map((e) => ({ value: e.id, label: e.name })) },
+          { key: "assignee", label: "Assigned To", type: "select", options: peopleOptions("tasks:create") },
           { key: "due", label: "Due Date", type: "date", required: true },
           { key: "priority", label: "Priority", type: "select", options: ["High", "Medium", "Low"] },
           { key: "label", label: "Label", placeholder: "e.g. api, design" },

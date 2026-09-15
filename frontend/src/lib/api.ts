@@ -101,6 +101,15 @@ export const isAppendOnly = (collection: string) =>
 export const isBacked = (collection: string) =>
   collection in ADAPTERS || BACKED_ELSEWHERE.has(collection);
 
+/**
+ * The permission module behind a collection — "leaves" → "leave".
+ *
+ * Lets a generic screen ask whether this user may edit or delete what it is
+ * showing, instead of offering the action and finding out from a 403.
+ */
+export const permissionModule = (collection: string): string | undefined =>
+  ADAPTERS[collection]?.permission?.split(":")[0];
+
 /** The collections with no endpoint yet — they persist to this browser only. */
 export const LOCAL_ONLY = Object.keys(collections).filter((c) => !isBacked(c));
 
@@ -565,6 +574,25 @@ const track = (work: Promise<unknown>) => {
   void work.finally(() => inFlight.delete(work));
 };
 
+/**
+ * Whether the write behind a returned row actually landed.
+ *
+ * `create`/`update`/`remove` hand back the optimistic row immediately, so a
+ * caller that wants to announce the result has nothing to wait on — which is
+ * how "Leave requested" came to sit on screen beside the validation error that
+ * refused it. The row is the handle: pass it to `api.outcome()` to learn
+ * whether the server accepted the change.
+ *
+ * A collection with no endpoint never fails, so an unknown handle resolves true.
+ */
+const outcomes = new WeakMap<object, Promise<boolean>>();
+
+const watch = <T extends object>(handle: T, work: Promise<boolean>): T => {
+  track(work);
+  outcomes.set(handle, work);
+  return handle;
+};
+
 export const api = {
   async login(email: string, password: string) {
     const body = await request<{ accessToken: string; refreshToken: string; user: Profile }>(
@@ -612,7 +640,7 @@ export const api = {
       return row;
     }
 
-    track((async () => {
+    return watch(row, (async () => {
       try {
         const created = await request<Row>(adapter.path, {
           method: "POST",
@@ -622,15 +650,16 @@ export const api = {
         const now = indexOf(rows, row.id);
         if (now >= 0) rows[now] = mapped;
         void loadAudit();
+        changed();
+        return true;
       } catch {
         // The row was never really created — take it back off the screen.
         const now = indexOf(rows, row.id);
         if (now >= 0) rows.splice(now, 1);
+        changed();
+        return false;
       }
-      changed();
     })());
-
-    return row;
   },
 
   update(collection: string, id: string | number, patch: object) {
@@ -653,7 +682,7 @@ export const api = {
       return optimistic;
     }
 
-    track((async () => {
+    return watch(optimistic, (async () => {
       try {
         const updated = await request<Row>(`${adapter.path}/${id}`, {
           method: "PATCH",
@@ -662,14 +691,15 @@ export const api = {
         const now = indexOf(rows, id);
         if (now >= 0) rows[now] = adapter.fromServer(updated);
         void loadAudit();
+        changed();
+        return true;
       } catch {
         const now = indexOf(rows, id);
         if (now >= 0) rows[now] = before;
+        changed();
+        return false;
       }
-      changed();
     })());
-
-    return optimistic;
   },
 
   replace(collection: string, id: string | number, data: object) {
@@ -697,23 +727,34 @@ export const api = {
       return { deleted: true };
     }
 
-    track((async () => {
+    return watch({ deleted: true }, (async () => {
       try {
         await request(`${adapter.path}/${id}`, { method: "DELETE" });
         void loadAudit();
+        return true;
       } catch {
         // Put it back where it was, so the list doesn't silently reorder.
         rows.splice(Math.min(at, rows.length), 0, before);
         changed();
+        return false;
       }
     })());
-
-    return { deleted: true };
   },
 
   /** Resolves once every write started so far has reached the server. */
   async settled() {
     while (inFlight.size) await Promise.allSettled([...inFlight]);
+  },
+
+  /**
+   * Did the write behind this row land? Pass back what `create`, `update` or
+   * `remove` returned. Announce success only once this resolves true — the
+   * server has the final say, and it refuses more than validation errors:
+   * a missing permission comes back the same way.
+   */
+  async outcome(handle: unknown): Promise<boolean> {
+    if (!handle || typeof handle !== "object") return true;
+    return (await outcomes.get(handle as object)) ?? true;
   },
 
   /** Re-read one collection from the server. */
@@ -758,6 +799,146 @@ export async function declineOffer(id: string, reason?: string): Promise<boolean
     return true;
   } catch {
     return false;
+  }
+}
+
+/* ----------------------------------------------------------------- users */
+
+/**
+ * Give someone a sign-in.
+ *
+ * An Employee is an HR record, not an account — the two are separate tables on
+ * purpose, so that contractors and ex-staff can exist without a login. Creating
+ * an employee therefore leaves them unable to sign in until this runs.
+ *
+ * The server creates the account as INVITED, and only ACTIVE accounts pass
+ * authentication, so the activation is part of the same operation rather than a
+ * second thing the caller must remember.
+ */
+export async function inviteUser(input: {
+  email: string;
+  name: string;
+  password: string;
+  roles?: string[];
+}): Promise<boolean> {
+  try {
+    const created = await request<{ id: string }>("/users", { method: "POST", body: input });
+    await request(`/users/${created.id}`, { method: "PATCH", body: { status: "ACTIVE" } });
+    await api.refresh("employees");
+    void loadAudit();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/* --------------------------------------------------------------- tickets */
+
+export type TicketReply = {
+  id: string;
+  authorName: string | null;
+  body: string;
+  isInternal: boolean;
+  createdAt: string;
+};
+
+/**
+ * One ticket with its conversation.
+ *
+ * The detail screen used to invent the thread — two messages attributed to the
+ * requester and the agent, written from the subject line. The endpoint has
+ * always returned the real replies; nothing asked for them.
+ */
+export async function loadTicket(
+  id: string
+): Promise<{ body: string; replies: TicketReply[] } | null> {
+  try {
+    const row = await request<Row>(`/tickets/${id}`, { quiet: true });
+    return {
+      body: String(row?.body ?? ""),
+      replies: ((row?.replies ?? []) as Row[]).map((r) => ({
+        id: String(r.id),
+        authorName: r.authorName ? String(r.authorName) : null,
+        body: String(r.body ?? ""),
+        isInternal: Boolean(r.isInternal),
+        createdAt: String(r.createdAt ?? ""),
+      })),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Post a reply. A public one reopens a resolved ticket, server-side. */
+export async function replyToTicket(
+  id: string,
+  body: string,
+  isInternal = false
+): Promise<boolean> {
+  try {
+    await request(`/tickets/${id}/replies`, { method: "POST", body: { body, isInternal } });
+    await api.refresh("tickets");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/* ----------------------------------------------------------------- leave */
+
+export type OutToday = {
+  id: string;
+  employeeId: string | null;
+  employeeName: string;
+  employeeCode: string;
+  startsOn: string;
+  endsOn: string;
+  halfDay: boolean;
+};
+
+/**
+ * Approve or reject a leave request.
+ *
+ * Deciding leave is not an edit of the row: the server moves the days from
+ * pending to used under a row lock, stamps who decided it and when, and writes
+ * the audit entry. There is no PATCH on /leave at all — the screen used to send
+ * one, get a 404, and leave the request showing as approved while the database
+ * kept it pending.
+ */
+export async function decideLeave(
+  id: string,
+  decision: "APPROVED" | "REJECTED",
+  note?: string
+): Promise<boolean> {
+  try {
+    await request(`/leave/${id}/decide`, {
+      method: "POST",
+      body: note ? { decision, note } : { decision },
+    });
+    await Promise.all([api.refresh("leaves"), api.refresh("leaveQuota")]);
+    void loadAudit();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Colleagues on approved leave today.
+ *
+ * Names and dates only. Anyone who holds leave:read may ask — knowing whether
+ * to expect a reply from someone is ordinary working information — but the
+ * reason and the leave type stay with the people who decide leave.
+ */
+export async function loadOutToday(on?: string): Promise<OutToday[]> {
+  try {
+    const rows = await request<OutToday[]>("/leave/out-today", {
+      query: on ? { on } : undefined,
+      quiet: true,
+    });
+    return rows ?? [];
+  } catch {
+    return [];
   }
 }
 
@@ -919,6 +1100,9 @@ export async function attendanceToday(): Promise<{
   clockedIn: boolean;
   in: string | null;
   out: string | null;
+  /** Approved full-day leave today: the server refuses a clock-in on one. */
+  onLeave: boolean;
+  leaveLabel: string | null;
 }> {
   const clock = (iso: unknown) =>
     iso
@@ -930,10 +1114,12 @@ export async function attendanceToday(): Promise<{
       clockedIn: Boolean(body?.clockedIn),
       in: clock(body?.record?.clockInAt),
       out: clock(body?.record?.clockOutAt),
+      onLeave: Boolean(body?.onLeave),
+      leaveLabel: body?.leaveLabel ? String(body.leaveLabel) : null,
     };
   } catch {
     // Nobody has an attendance record on their first day; that isn't an error.
-    return { clockedIn: false, in: null, out: null };
+    return { clockedIn: false, in: null, out: null, onLeave: false, leaveLabel: null };
   }
 }
 
@@ -1166,11 +1352,15 @@ export async function searchAll(query: string, limit = 5): Promise<SearchHit[]> 
   if (!q) return [];
 
   try {
+    /* The endpoint takes `q` and nothing else — it rejects unknown query
+       properties outright, so sending `limit` turned every search into a 400
+       and the palette only ever offered its static page list. Cap here
+       instead, below. */
     const results = await request<Array<Row>>("/search", {
-      query: { q, limit },
+      query: { q },
       quiet: true,
     });
-    return (results ?? []).map((r) => {
+    return (results ?? []).slice(0, limit).map((r) => {
       const type = String(r.type ?? "Result");
       const id = String(r.id ?? "");
       return {

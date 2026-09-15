@@ -1,6 +1,7 @@
 import { Plus } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { DataTable } from "@/components/DataTable";
+import { peopleOptions, selectablePeople } from "@/lib/people";
 import { FormModal, useCrud } from "@/components/crud";
 import { DurationFilter, FilterBar, PageHeader } from "@/components/PageHeader";
 import { AvatarName, Select, StatusPill } from "@/components/ui";
@@ -18,7 +19,7 @@ export default function Timesheets() {
     itemName: "Time Log",
     fields: [
       { key: "taskId", label: "Task", type: "select", options: tasks.map((t) => ({ value: t.id, label: `${t.code} · ${t.title.slice(0, 34)}` })), required: true },
-      { key: "employee", label: "Employee", type: "select", options: employees.map((e) => ({ value: e.id, label: e.name })), required: true },
+      { key: "employee", label: "Employee", type: "select", options: peopleOptions("timelogs:delete"), required: true },
       { key: "start", label: "Start Time", placeholder: `${todayISO()} 09:00 am`, required: true },
       { key: "end", label: "End Time", placeholder: `${todayISO()} 11:00 am`, required: true },
       { key: "hours", label: "Total Hours", type: "number", required: true },
@@ -29,7 +30,9 @@ export default function Timesheets() {
   const projectOf = (log: (typeof timeLogs)[number]) =>
     projects.find((p) => p.id === tasks.find((t) => t.id === log.taskId)?.projectId)?.name;
   const filters = useFilters<(typeof timeLogs)[number]>([
-    { label: "Employee", options: ["All", ...employees.map((e) => e.name)], match: (l, v) => byId(l.employee)?.name === v },
+    // Only people whose time you can actually see — for everyone else this
+    // filter listed the whole company beside a list of your own entries.
+    { label: "Employee", options: ["All", ...selectablePeople("timelogs:delete").map((e) => e.name)], match: (l, v) => byId(l.employee)?.name === v },
     { label: "Project", options: ["All", ...projects.map((p) => p.name)], match: (l, v) => projectOf(l) === v },
   ]);
   const shown = filters.apply(crud.items);
@@ -75,7 +78,7 @@ export default function Timesheets() {
         title="Log Time"
         fields={[
           { key: "taskId", label: "Task", type: "select", options: tasks.map((t) => ({ value: t.id, label: `${t.code} · ${t.title.slice(0, 34)}` })), required: true },
-          { key: "employee", label: "Employee", type: "select", options: employees.map((e) => ({ value: e.id, label: e.name })), required: true },
+          { key: "employee", label: "Employee", type: "select", options: peopleOptions("timelogs:delete"), required: true },
           { key: "start", label: "Start Time", required: true },
           { key: "end", label: "End Time", required: true },
           { key: "hours", label: "Total Hours", type: "number", required: true },

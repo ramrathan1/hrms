@@ -1,9 +1,11 @@
 import { Plus } from "lucide-react";
 import { useState } from "react";
 import { CalendarMonth } from "@/components/CalendarMonth";
+import { can } from "@/lib/api";
 import { FormModal } from "@/components/crud";
 import { PageHeader } from "@/components/PageHeader";
 import { events } from "@/data/ops";
+import { HOLIDAY_COLOR, holidayEvents } from "@/lib/calendar";
 import { api } from "@/lib/api";
 import { useToast } from "@/lib/store";
 
@@ -16,22 +18,46 @@ export default function Events() {
   const [open, setOpen] = useState(false);
   const [pickedDate, setPickedDate] = useState<string | null>(null);
   const [items, setItems] = useState(() => [...events]);
+  /* Holidays are drawn here too, so the month on screen is the month people
+     actually work. They are not editable from this page — the list is HR's,
+     under HR › Holidays. */
+  const shown = [...items, ...holidayEvents()];
   return (
     <>
       <PageHeader
         title="Events"
         actions={
-          <button className="btn-primary" onClick={() => setOpen(true)}>
-            <Plus size={15} /> Add Event
-          </button>
+          can("events:create") ? (
+            <button className="btn-primary" onClick={() => setOpen(true)}>
+              <Plus size={15} /> Add Event
+            </button>
+          ) : undefined
         }
       />
+      <div className="mb-3 flex flex-wrap items-center gap-4 text-xs text-muted">
+        {Object.entries(COLOR_BY_KIND).map(([kind, color]) => (
+          <span key={kind} className="flex items-center gap-1.5">
+            <span className="h-2.5 w-2.5 rounded-full" style={{ background: color }} />
+            {kind}
+          </span>
+        ))}
+        <span className="flex items-center gap-1.5 font-semibold">
+          <span className="h-2.5 w-2.5 rounded-full" style={{ background: HOLIDAY_COLOR }} />
+          Holiday
+        </span>
+      </div>
       <CalendarMonth
-        events={items}
-        onDayClick={(d) => {
-          setPickedDate(d);
-          setOpen(true);
-        }}
+        events={shown}
+        /* Clicking a day opened the Add Event form for everyone, including
+           people whose accounts cannot create one — the save would 403. */
+        onDayClick={
+          can("events:create")
+            ? (d) => {
+                setPickedDate(d);
+                setOpen(true);
+              }
+            : undefined
+        }
       />
       <FormModal
         open={open}

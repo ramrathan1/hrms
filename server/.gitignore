@@ -3,4 +3,7 @@ dist
 .env
 src/generated
 *.log
-storage
+# Anchored: the uploaded-blob directory (STORAGE_ROOT) at the server root only.
+# Unanchored, this also swallowed src/infra/storage/ — which is why that module
+# went missing from the repository.
+/storage

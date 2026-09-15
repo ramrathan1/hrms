@@ -2,6 +2,7 @@ import clsx from "clsx";
 import { BookOpen, Eye, Plus, Search, ThumbsUp } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useCrud } from "@/components/crud";
+import { can } from "@/lib/api";
 import { PageHeader } from "@/components/PageHeader";
 import { Modal } from "@/components/ui";
 import { kbArticles } from "@/data/ops";
@@ -58,9 +59,11 @@ export default function Knowledge() {
       <PageHeader
         title="Knowledge Base"
         actions={
-          <button className="btn-primary" onClick={crud.openNew}>
-            <Plus size={15} /> Add Article
-          </button>
+          can("knowledge:create") ? (
+            <button className="btn-primary" onClick={crud.openNew}>
+              <Plus size={15} /> Add Article
+            </button>
+          ) : undefined
         }
       />
 
@@ -125,7 +128,9 @@ export default function Knowledge() {
           <div className="card col-span-full flex flex-col items-center gap-2 py-14 text-sm text-faint">
             <BookOpen size={26} />
             No articles match “{q || cat}”.
-            <button className="btn-primary mt-2 px-3 py-1.5 text-xs" onClick={crud.openNew}>Write the first one</button>
+            {can("knowledge:create") && (
+              <button className="btn-primary mt-2 px-3 py-1.5 text-xs" onClick={crud.openNew}>Write the first one</button>
+            )}
           </div>
         )}
       </div>

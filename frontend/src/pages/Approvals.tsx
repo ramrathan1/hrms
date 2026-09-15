@@ -12,7 +12,7 @@ import { estimates, expenses } from "@/data/finance";
 import { leaves } from "@/data/hr";
 import { overtimeRequests } from "@/data/people2";
 import { tasks, timeLogs } from "@/data/work";
-import { api } from "@/lib/api";
+import { api, decideLeave } from "@/lib/api";
 import { fmtDate, money } from "@/lib/format";
 import { useToast } from "@/lib/store";
 
@@ -90,15 +90,37 @@ export default function Approvals() {
   const pending = items.filter((i) => !handled[i.id]);
   const rows = tab === "All" ? pending : pending.filter((i) => i.kind === tab);
 
-  const decide = (item: Item, ok: boolean) => {
+  /* Leave has its own endpoint rather than a status edit: the server moves the
+     days from pending to used under a row lock and records who decided it.
+     There is no PATCH on /leave at all, so approving one from here used to 404
+     while the row went grey as though it had worked. Everything else on this
+     screen really is a status change. */
+  const decide = async (item: Item, ok: boolean) => {
     setHandled((h) => ({ ...h, [item.id]: ok ? "Approved" : "Rejected" }));
-    void api.update(item.collection, item.recordId, ok ? item.approvePatch : item.rejectPatch);
+
+    const landed =
+      item.collection === "leaves"
+        ? await decideLeave(String(item.recordId), ok ? "APPROVED" : "REJECTED")
+        : await api.outcome(
+            api.update(item.collection, item.recordId, ok ? item.approvePatch : item.rejectPatch)
+          );
+
+    if (!landed) {
+      // Put it back on the list — the decision did not take. The API layer has
+      // already said why.
+      setHandled((h) => {
+        const next = { ...h };
+        delete next[item.id];
+        return next;
+      });
+      return;
+    }
     push(`${item.kind} ${ok ? "approved" : "rejected"} — ${item.who}`);
   };
 
   const bulk = (ok: boolean) => {
     if (rows.length === 0) return push("Nothing to action");
-    rows.forEach((r) => decide(r, ok));
+    rows.forEach((r) => void decide(r, ok));
   };
 
   const counts = (k: string) => pending.filter((i) => i.kind === k).length;

@@ -3,7 +3,7 @@
    arrays, and the backend API all in sync. */
 import { useEffect, useState, type ReactNode } from "react";
 import { Modal } from "./ui";
-import { api, isAppendOnly, onStoreChange } from "@/lib/api";
+import { api, can, isAppendOnly, onStoreChange, permissionModule } from "@/lib/api";
 import { useToast } from "@/lib/store";
 
 export type FieldOption = string | { value: string; label: string };
@@ -201,6 +201,17 @@ export function useCrud<T extends { id: string | number }>(opts: {
      which is how a computed balance ends up one deposit behind. */
   useEffect(() => onStoreChange(() => setItems([...opts.seed])), [opts.seed]);
 
+  /* Announce a write only once the server has taken it.
+     These toasts used to fire on click, which meant a refused write said
+     "added" and was contradicted a moment later by the real error — both
+     messages on screen at the same time, the optimistic one first. A refusal
+     already announces its own reason, so there is nothing to say here. */
+  const announce = (handle: unknown, message: string) => {
+    void api.outcome(handle).then((ok) => {
+      if (ok) push(message);
+    });
+  };
+
   const add = (values: Record<string, unknown>) => {
     const rec = {
       ...opts.defaults,
@@ -208,21 +219,19 @@ export function useCrud<T extends { id: string | number }>(opts: {
       id: opts.makeId?.(items) ?? `${opts.collection.slice(0, 3)}-${Date.now()}`,
     } as T;
     commit([rec, ...items]);
-    void api.create(opts.collection, rec);
-    push(`${opts.itemName} added`);
+    announce(api.create(opts.collection, rec), `${opts.itemName} added`);
     return rec;
   };
 
   const update = (id: T["id"], patch: Partial<T>, quiet = false) => {
     commit(items.map((r) => (r.id === id ? { ...r, ...patch } : r)));
-    void api.update(opts.collection, id, patch);
-    if (!quiet) push(`${opts.itemName} updated`);
+    const handle = api.update(opts.collection, id, patch);
+    if (!quiet) announce(handle, `${opts.itemName} updated`);
   };
 
   const remove = (id: T["id"]) => {
     commit(items.filter((r) => r.id !== id));
-    void api.remove(opts.collection, id);
-    push(`${opts.itemName} deleted`);
+    announce(api.remove(opts.collection, id), `${opts.itemName} deleted`);
   };
 
   /** bulk delete — wired to the DataTable selection bar */
@@ -252,6 +261,12 @@ export function useCrud<T extends { id: string | number }>(opts: {
     push(`${rows.length} ${opts.itemName.toLowerCase()}${rows.length === 1 ? "" : "s"} duplicated`);
   };
 
+  /* Changing a record is not the same right as reading it. A collection with no
+     endpoint is local to this browser, so there is nobody to refuse it. */
+  const mod = permissionModule(opts.collection);
+  const mayEdit = !mod || can(`${mod}:update`);
+  const mayDelete = !mod || can(`${mod}:delete`);
+
   const rowActions = (r: T, extra: RowAction[] = []): RowAction[] => [
     ...extra,
     ...(opts.onView || opts.withView !== false
@@ -260,8 +275,10 @@ export function useCrud<T extends { id: string | number }>(opts: {
     // Some records are append-only on the server — an award given, a punch at
     // a door, a salary band. Offering "Edit" for them would promise something
     // the API deliberately refuses.
-    ...(isAppendOnly(opts.collection) ? [] : [{ label: "Edit", onClick: () => setEditing(r) }]),
-    { label: "Delete", danger: true, onClick: () => setRemoving(r) },
+    ...(isAppendOnly(opts.collection) || !mayEdit
+      ? []
+      : [{ label: "Edit", onClick: () => setEditing(r) }]),
+    ...(mayDelete ? [{ label: "Delete", danger: true, onClick: () => setRemoving(r) }] : []),
   ];
 
   const modals = (

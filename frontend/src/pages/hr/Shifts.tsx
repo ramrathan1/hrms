@@ -23,6 +23,10 @@ export default function Shifts() {
   const shiftAt = (idx: number, di: number) => {
     const override = shifts.find((s) => s.id === overrides[employees[idx].id]);
     if (override) return override;
+    /* Nothing to place until at least one shift exists. Without this the
+       `% shifts.length` below is `% 0`, which is NaN, and every cell reads an
+       undefined shift. */
+    if (!shifts.length) return undefined;
     const home = idx % shifts.length;
     const covers = (idx * 2 + 1) % 5 === di;
     return shifts[covers ? (home + 1) % shifts.length : home];
@@ -32,10 +36,10 @@ export default function Shifts() {
   const primaryShift = (idx: number) => {
     const tally = new Map<string, number>();
     WEEK.slice(0, 5).forEach((_, di) => {
-      const n = shiftAt(idx, di).name;
-      tally.set(n, (tally.get(n) ?? 0) + 1);
+      const n = shiftAt(idx, di)?.name;
+      if (n) tally.set(n, (tally.get(n) ?? 0) + 1);
     });
-    return [...tally.entries()].sort((a, b) => b[1] - a[1])[0][0];
+    return [...tally.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
   };
   const roster = employees
     .map((e, idx) => ({ e, idx }))
@@ -103,10 +107,12 @@ export default function Shifts() {
                     <td key={d} className="text-center">
                       {isWeekend ? (
                         <span className="text-xs text-faint">Day Off</span>
-                      ) : (
+                      ) : shift ? (
                         <span className="inline-block rounded px-2 py-1 text-[11px] font-semibold text-white" style={{ background: shift.color }}>
                           {shift.name.split(" ")[0]}
                         </span>
+                      ) : (
+                        <span className="text-xs text-faint">—</span>
                       )}
                     </td>
                   );

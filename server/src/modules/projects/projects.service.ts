@@ -5,7 +5,7 @@ import { BaseCrudService } from '../../common/services/base-crud.service';
 import { PrismaService } from '../../infra/prisma/prisma.service';
 import { CacheService } from '../../infra/cache/cache.service';
 import {
-  BusinessRuleError, ConflictError, NotFoundError,
+  BusinessRuleError, ConflictError, ForbiddenError, NotFoundError,
 } from '../../common/errors/domain.error';
 import { getTenantContext, orgScope } from '../../infra/tenant/tenant-context';
 import type {
@@ -13,6 +13,7 @@ import type {
   ProjectQueryDto, TaskQueryDto, TimeLogQueryDto, UpdateMilestoneDto,
   UpdateProjectDto, UpdateTaskDto,
 } from './dto/project.dto';
+import { currentUserId, employeeScope, holdsAny, peopleScope } from '../../common/self-scope';
 
 type Row = { id: string };
 
@@ -36,6 +37,20 @@ export class ProjectsService extends BaseCrudService<Row> {
     }
     if (query.memberId) where.members = { some: { userId: query.memberId } };
     return where;
+  }
+
+  /* A project you are not on is somebody else's work — its budget, client and
+     team are not yours to browse. A team leader also sees what their reports
+     are on, which is the point of leading a team. */
+  protected override scopeFilter() {
+    const scope = peopleScope();
+    if (scope === 'all') return {};
+    const userId = currentUserId();
+    const onIt = { members: { some: { userId } } };
+    if (scope === 'self') return onIt;
+    return {
+      OR: [onIt, { members: { some: { user: { employee: { reportsTo: { userId } } } } } }],
+    };
   }
 
   protected override listInclude() {
@@ -211,7 +226,27 @@ export class TasksService extends BaseCrudService<Row> {
       where.dueOn = { lt: new Date() };
       where.status = { not: 'COMPLETED' };
     }
+
     return where;
+  }
+
+  /* Your board is your work: the tasks assigned to you, the ones you raised,
+     and the ones on a project you are on. Reading — and therefore editing, via
+     findOne — the whole company's board is a right over other people's work. */
+  protected override scopeFilter() {
+    const scope = peopleScope();
+    if (scope === 'all') return {};
+    const userId = currentUserId();
+    const ors: Record<string, unknown>[] = [
+      { assignees: { some: { userId } } },
+      { createdById: userId },
+      { project: { members: { some: { userId } } } },
+    ];
+    // A team leader's board includes the work their reports are carrying.
+    if (scope === 'team') {
+      ors.push({ assignees: { some: { user: { employee: { reportsTo: { userId } } } } } });
+    }
+    return { OR: ors };
   }
 
   protected override listInclude() {
@@ -341,6 +376,8 @@ export class TimeLogsService extends BaseCrudService<Row> {
     if (query.employeeId) where.employeeId = query.employeeId;
     if (query.projectId) where.projectId = query.projectId;
     if (query.taskId) where.taskId = query.taskId;
+
+
     if (query.from || query.to) {
       where.startedAt = {
         ...(query.from ? { gte: new Date(query.from) } : {}),
@@ -348,6 +385,12 @@ export class TimeLogsService extends BaseCrudService<Row> {
       };
     }
     return where;
+  }
+
+  /* A timesheet is a personal record — it carries notes about what somebody
+     spent their day on. */
+  protected override scopeFilter() {
+    return employeeScope();
   }
 
   protected override listInclude() {
@@ -359,6 +402,27 @@ export class TimeLogsService extends BaseCrudService<Row> {
   }
 
   async createTimeLog(dto: CreateTimeLogDto) {
+    /* Whose timesheet this lands on arrives in the request body, so it cannot
+       be taken on trust: with only timelogs:create anyone could otherwise put
+       hours — billable ones — on a colleague's timesheet. Logging time for
+       other people belongs to whoever manages their timesheets, which is the
+       same group that may delete entries. */
+    if (!holdsAny('timelogs:delete')) {
+      const own = await this.prisma.db.employee.findFirst({
+        where: { userId: currentUserId() },
+        select: { id: true },
+      });
+      if (!own) {
+        throw new ForbiddenError(
+          'Your account is not linked to an employee record, so time cannot be logged against it.',
+          'NO_EMPLOYEE_RECORD',
+        );
+      }
+      if (dto.employeeId !== own.id) {
+        throw new ForbiddenError('You can only log time for yourself.', 'NOT_YOUR_TIMESHEET');
+      }
+    }
+
     const startedAt = new Date(dto.startedAt);
     const endedAt = dto.endedAt ? new Date(dto.endedAt) : null;
 

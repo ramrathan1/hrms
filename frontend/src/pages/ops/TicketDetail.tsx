@@ -2,16 +2,16 @@
    assignment/status/priority controls, SLA countdown, attachments and activity. */
 import clsx from "clsx";
 import { Clock, Lock, Send, Tag, Timer, UserCog } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { PageHeader } from "@/components/PageHeader";
 import { Attachments, ActivityTimeline, type FileItem } from "@/components/RecordPanels";
 import { Avatar, AvatarName, StatusPill, Tabs } from "@/components/ui";
 import { byId, clients, employees } from "@/data/core";
 import { tickets } from "@/data/ops";
-import { api } from "@/lib/api";
+import { api, can, loadTicket, replyToTicket } from "@/lib/api";
 import { fmtDate } from "@/lib/format";
-import { CURRENT_USER, useToast } from "@/lib/store";
+import { useToast } from "@/lib/store";
 
 type Reply = { id: string; by: string; text: string; time: string; internal?: boolean };
 
@@ -36,31 +36,58 @@ export default function TicketDetail() {
   const [draft, setDraft] = useState("");
   const [internal, setInternal] = useState(false);
   const [files, setFiles] = useState<FileItem[]>([]);
-  const [replies, setReplies] = useState<Reply[]>([
-    {
-      id: "r1",
-      by: ticket.requester,
-      text: `Hi team,\n\n${ticket.subject}. It started this morning and is blocking our billing run — could someone take a look?`,
-      time: "09:12 AM",
-    },
-    {
-      id: "r2",
-      by: byId(ticket.agent)?.name ?? "Support",
-      text: "Thanks for flagging this — I can reproduce it. Investigating now and will update you shortly.",
-      time: "09:40 AM",
-    },
-  ]);
+  /* The real conversation. This list used to be seeded with two invented
+     messages — one attributed to the requester, one to the agent, both composed
+     from the subject line — on tickets that had no replies at all. */
+  const [replies, setReplies] = useState<Reply[]>([]);
+  const mayManage = can("tickets:update");
+
+  const loadThread = useCallback(async () => {
+    const detail = await loadTicket(String(ticket.id));
+    if (!detail) return;
+    setReplies([
+      // The ticket's own body is the opening message: it is what the requester
+      // wrote, and until now no screen ever showed it.
+      ...(detail.body
+        ? [{ id: "opening", by: ticket.requester, text: detail.body, time: "Opened" }]
+        : []),
+      ...detail.replies.map((r) => ({
+        id: r.id,
+        by: r.authorName ?? "Support",
+        text: r.body,
+        time: r.createdAt
+          ? new Date(r.createdAt).toLocaleString([], {
+              day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit",
+            })
+          : "",
+        internal: r.isInternal,
+      })),
+    ]);
+  }, [ticket.id, ticket.requester]);
+
+  useEffect(() => {
+    void loadThread();
+  }, [loadThread]);
 
   const client = clients.find((c) => c.name === ticket.requester);
+  const staffRequester = employees.find((e) => e.name === ticket.requester);
 
+  /* Only what the record actually says. The four entries that used to sit here
+     — assignment, a priority change, a status change — were written on the spot
+     with invented timestamps. */
   const activity = useMemo(
     () => [
-      { id: "a1", by: ticket.requester, text: `created ticket ${ticket.number}`, time: "09:12 AM" },
-      { id: "a2", by: byId(ticket.agent)?.name ?? "Support", text: `was assigned to this ticket`, time: "09:20 AM" },
-      { id: "a3", by: byId(ticket.agent)?.name ?? "Support", text: `set priority to ${priority}`, time: "09:21 AM" },
-      { id: "a4", by: CURRENT_USER.name, text: `changed status to ${status}`, time: "now" },
+      { id: "created", by: ticket.requester, text: `raised ${ticket.number}`, time: fmtDate(ticket.updated) },
+      ...replies
+        .filter((r) => r.id !== "opening")
+        .map((r) => ({
+          id: `act-${r.id}`,
+          by: r.by,
+          text: r.internal ? "added an internal note" : "replied",
+          time: r.time,
+        })),
     ],
-    [ticket, status, priority]
+    [ticket.requester, ticket.number, ticket.updated, replies]
   );
 
   const patch = (p: Record<string, unknown>) => {
@@ -68,13 +95,20 @@ export default function TicketDetail() {
     void api.update("tickets", ticket.id, p);
   };
 
-  const send = () => {
-    if (!draft.trim()) return;
-    setReplies((rs) => [
-      ...rs,
-      { id: `r-${Date.now()}`, by: CURRENT_USER.name, text: draft.trim(), time: "now", internal },
-    ]);
-    if (!internal && status === "Open") {
+  const send = async () => {
+    const text = draft.trim();
+    if (!text) return;
+
+    // The reply belongs on the server, not in this tab's memory: it is what the
+    // requester reads, and it is what the next person to open this ticket sees.
+    const sent = await replyToTicket(String(ticket.id), text, internal);
+    if (!sent) return; // the API layer announced why
+    await loadThread();
+
+    /* Moving the ticket to Pending is an agent action, and PATCH /tickets is
+       gated on tickets:update. Doing it after a requester's reply put "Pending"
+       on screen while the server kept the ticket Open. */
+    if (mayManage && !internal && status === "Open") {
       setStatus("Pending");
       patch({ status: "Pending" });
     }
@@ -91,7 +125,7 @@ export default function TicketDetail() {
         crumbs={["Tickets"]}
         actions={
           <>
-            {status !== "Resolved" && status !== "Closed" ? (
+            {!mayManage ? null : status !== "Resolved" && status !== "Closed" ? (
               <button
                 className="btn-primary"
                 onClick={() => {
@@ -157,21 +191,27 @@ export default function TicketDetail() {
                 {/* composer */}
                 <div className="mt-5 rounded-xl border border-line bg-white">
                   <div className="flex flex-wrap items-center gap-1.5 border-b border-line px-3 py-2">
-                    <button
-                      className={clsx("btn rounded-lg px-2.5 py-1 text-xs font-semibold", !internal ? "bg-primary-soft text-primary" : "text-muted hover:bg-page")}
-                      onClick={() => setInternal(false)}
-                    >
-                      Reply to customer
-                    </button>
-                    <button
-                      className={clsx("btn rounded-lg px-2.5 py-1 text-xs font-semibold", internal ? "bg-warn-soft text-[#a9720e]" : "text-muted hover:bg-page")}
-                      onClick={() => setInternal(true)}
-                    >
-                      <Lock size={11} /> Internal note
-                    </button>
+                    {/* Writing a note about the request, and answering with a
+                        canned line, are both the support side of the desk. */}
+                    {mayManage && (
+                      <>
+                        <button
+                          className={clsx("btn rounded-lg px-2.5 py-1 text-xs font-semibold", !internal ? "bg-primary-soft text-primary" : "text-muted hover:bg-page")}
+                          onClick={() => setInternal(false)}
+                        >
+                          Reply to customer
+                        </button>
+                        <button
+                          className={clsx("btn rounded-lg px-2.5 py-1 text-xs font-semibold", internal ? "bg-warn-soft text-[#a9720e]" : "text-muted hover:bg-page")}
+                          onClick={() => setInternal(true)}
+                        >
+                          <Lock size={11} /> Internal note
+                        </button>
+                      </>
+                    )}
                     <span className="ml-auto flex flex-wrap items-center gap-1">
-                      <span className="mr-1 text-[11px] font-semibold text-faint">Canned:</span>
-                      {CANNED.map((c) => (
+                      {mayManage && <span className="mr-1 text-[11px] font-semibold text-faint">Canned:</span>}
+                      {(mayManage ? CANNED : []).map((c) => (
                         <button
                           key={c.label}
                           className="btn rounded-lg border border-line px-2 py-1 text-[11px] font-medium text-muted hover:border-primary hover:text-primary"
@@ -186,14 +226,24 @@ export default function TicketDetail() {
                     rows={4}
                     value={draft}
                     onChange={(e) => setDraft(e.target.value)}
-                    placeholder={internal ? "Note for the team (not visible to the customer)…" : `Reply to ${ticket.requester}…`}
+                    placeholder={
+                      internal
+                        ? "Note for the team (not visible to the customer)…"
+                        : mayManage
+                          ? `Reply to ${ticket.requester}…`
+                          : "Add to this ticket…"
+                    }
                     className="w-full resize-y px-4 py-3 text-sm outline-none placeholder:text-faint"
                   />
                   <div className="flex items-center gap-3 border-t border-line px-3 py-2">
                     <button className="btn-primary px-4 py-1.5 text-xs" onClick={send}>
                       <Send size={13} /> {internal ? "Add note" : "Send reply"}
                     </button>
-                    <span className="text-[11px] text-faint">Replies email the requester and set the ticket to Pending.</span>
+                    <span className="text-[11px] text-faint">
+                      {mayManage
+                        ? "Replies go to the requester and set the ticket to Pending."
+                        : "Your reply is added to the ticket and the support team is notified."}
+                    </span>
                   </div>
                 </div>
               </div>
@@ -223,7 +273,20 @@ export default function TicketDetail() {
         <div className="space-y-5">
           <div className="card p-5">
             <h3 className="mb-3.5 font-display text-[15px] font-bold">Ticket properties</h3>
+            {!mayManage && (
+              <p className="mb-3 text-xs text-muted">
+                Status, priority and assignment are set by the support team.
+              </p>
+            )}
             <div className="space-y-3.5 text-sm">
+              {!mayManage ? (
+                <dl className="space-y-2">
+                  <div className="flex justify-between"><dt className="text-muted">Status</dt><dd><StatusPill status={status} /></dd></div>
+                  <div className="flex justify-between"><dt className="text-muted">Priority</dt><dd><StatusPill status={priority} /></dd></div>
+                  <div className="flex justify-between"><dt className="text-muted">Agent</dt><dd className="font-medium">{byId(agent)?.name ?? "Unassigned"}</dd></div>
+                </dl>
+              ) : (
+                <>
               <label className="block">
                 <span className="lbl">Status</span>
                 <select
@@ -266,6 +329,8 @@ export default function TicketDetail() {
                   {employees.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
                 </select>
               </label>
+                </>
+              )}
             </div>
           </div>
 
@@ -286,9 +351,17 @@ export default function TicketDetail() {
 
           <div className="card p-5">
             <h3 className="mb-3 font-display text-[15px] font-bold">Requester</h3>
-            <AvatarName name={ticket.requester} sub={client?.company ?? "Client"} size={38} />
+            <AvatarName
+              name={ticket.requester}
+              sub={client?.company ?? staffRequester?.designation ?? "Requester"}
+              size={38}
+            />
             <dl className="mt-3.5 space-y-2 text-sm">
-              <div className="flex justify-between"><dt className="text-muted">Email</dt><dd className="font-medium">{client?.email ?? "—"}</dd></div>
+              <div className="flex justify-between">
+                <dt className="text-muted">Email</dt>
+                {/* Not every ticket comes from a client: colleagues raise them too. */}
+                <dd className="font-medium">{client?.email ?? staffRequester?.email ?? "—"}</dd>
+              </div>
               <div className="flex justify-between"><dt className="text-muted">Group</dt><dd className="font-medium">{ticket.group}</dd></div>
               <div className="flex justify-between"><dt className="text-muted">Type</dt><dd className="font-medium">{ticket.type}</dd></div>
               <div className="flex justify-between"><dt className="text-muted">Last activity</dt><dd className="font-medium">{fmtDate(ticket.updated)}</dd></div>

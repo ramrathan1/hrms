@@ -219,7 +219,7 @@ export function SaveBar({
   extra,
   toast = "Saved successfully",
 }: {
-  onSave?: () => void;
+  onSave?: () => void | Promise<void>;
   onCancel?: () => void;
   saveLabel?: string;
   extra?: ReactNode;
@@ -227,16 +227,29 @@ export function SaveBar({
 }) {
   const { push } = useToast();
   const nav = useNavigate();
+  const [saving, setSaving] = useState(false);
+
+  /* Announce the save only once it has actually landed. Pushing the toast up
+     front meant a rejected write told the user "saved" and then contradicted
+     itself with the API's error toast a moment later. A save that fails has
+     already surfaced its own message, so there is nothing to add here. */
+  const submit = async () => {
+    if (saving) return;
+    setSaving(true);
+    try {
+      await onSave?.();
+      push(toast);
+    } catch {
+      /* the API layer announced the reason */
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <div className="mt-2 flex items-center gap-3 border-t border-line pt-5">
-      <button
-        className="btn-primary"
-        onClick={() => {
-          push(toast);
-          onSave?.();
-        }}
-      >
-        <Check size={15} /> {saveLabel}
+      <button className="btn-primary" onClick={submit} disabled={saving}>
+        <Check size={15} /> {saving ? "Saving…" : saveLabel}
       </button>
       {extra}
       <button type="button" className="btn-ghost" onClick={() => (onCancel ? onCancel() : nav(-1))}>

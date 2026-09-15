@@ -5,6 +5,7 @@ import { StorageService } from '../../infra/storage/storage.service';
 import { BusinessRuleError, NotFoundError } from '../../common/errors/domain.error';
 import { getTenantContext, orgScope } from '../../infra/tenant/tenant-context';
 import { paginate, type PaginationQueryDto } from '../../common/dto/pagination.dto';
+import { currentUserId, peopleScope } from '../../common/self-scope';
 import type { FileQueryDto, UploadFileDto } from './dto/file.dto';
 
 /** 25 MB, matching what the UI offered. */
@@ -115,8 +116,31 @@ export class FilesService {
 
   /* ------------------------------------------------------------- read */
 
+  /**
+   * Owner types whose attachments are shared work: a spec on a task, a policy
+   * in the knowledge base. Everything else — an ID proof on an employee record,
+   * a payslip, a document on a leave request — belongs to one person, and is
+   * listed only for its uploader or for someone with reach over other people's
+   * records. Attachments carry no owner of their own, so this is the honest
+   * line to draw without resolving each owning record.
+   */
+  private static readonly SHARED_OWNER_TYPES = [
+    'projects', 'tasks', 'milestones', 'knowledge', 'notices', 'events',
+    'clients', 'contracts', 'proposals', 'estimates', 'invoices', 'discussions',
+  ];
+
+  private scopeToViewer(): Record<string, unknown> {
+    if (peopleScope() === 'all') return {};
+    return {
+      OR: [
+        { uploadedById: currentUserId() },
+        { ownerType: { in: FilesService.SHARED_OWNER_TYPES } },
+      ],
+    };
+  }
+
   async findAll(query: FileQueryDto & PaginationQueryDto) {
-    const where: Record<string, unknown> = {};
+    const where: Record<string, unknown> = { ...this.scopeToViewer() };
     if (query.ownerType) where.ownerType = query.ownerType;
     if (query.ownerId) where.ownerId = query.ownerId;
     if (query.q) where.fileName = { contains: query.q, mode: 'insensitive' };
@@ -134,7 +158,10 @@ export class FilesService {
   }
 
   async findOne(id: string) {
-    const found = await this.prisma.db.attachment.findFirst({ where: { id } });
+    // The same rule as the list: a file id is not authorisation to read it.
+    const found = await this.prisma.db.attachment.findFirst({
+      where: { id, ...this.scopeToViewer() },
+    });
     if (!found) throw new NotFoundError('File', id);
     return found;
   }

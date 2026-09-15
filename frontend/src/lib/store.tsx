@@ -1,4 +1,4 @@
-import { roleById, roleIdFromKeys, roleIdFromLabel, type RoleId } from "./roles";
+import { roleById, roleIdFromKeys, roleIdsFromKeys, roleIdFromLabel, type RoleId } from "./roles";
 import {
   createContext,
   useCallback,
@@ -39,14 +39,18 @@ export const logout = () => {
   } catch {
     /* storage unavailable */
   }
+  /* Leave the realtime hub too. Signing out used to clear the tokens and walk
+     away with the socket still open, so the Virtual Office went on showing the
+     person as present — "Just arrived" — long after they had gone. */
+  void import("./ws").then((m) => m.wsc.disconnect()).catch(() => {});
   // Revokes the refresh token server-side and clears both tokens here.
   void import("./api").then((m) => m.api.logout()).catch(() => {});
 };
 
-export type CurrentUser = { id: string; name: string; role: string; email: string; roleId: RoleId };
+export type CurrentUser = { id: string; name: string; role: string; email: string; roleId: RoleId; roleIds: RoleId[] };
 
 const USER_KEY = "ws.user";
-const FALLBACK: CurrentUser = { id: "e1", name: "Mohammed Ziemann", role: "Team Lead", email: "admin@worksuite.demo", roleId: "team-leader" };
+const FALLBACK: CurrentUser = { id: "e1", name: "Mohammed Ziemann", role: "Team Lead", email: "admin@worksuite.demo", roleId: "team-leader", roleIds: ["team-leader"] };
 
 /* Mutated in place on sign-in: pages import CURRENT_USER directly and read it
    at render time, so replacing the object's fields reaches all of them without
@@ -98,6 +102,8 @@ void import("./api")
         name: p.name,
         email: p.email,
         roleId,
+        // Every portal this account may view — what the role switcher offers.
+        roleIds: roleIdsFromKeys(p.roles),
         // Show the role the server actually granted, not whatever label was
         // last cached in this browser.
         role: roleById(roleId).label,

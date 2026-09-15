@@ -27,8 +27,18 @@ export default function EmployeeForm() {
       hourly: Number(v.hourly || 50),
     };
     employees.push(employee);
-    void api.create("employees", employee);
-    nav("/hr/employees");
+    api.create("employees", employee);
+
+    /* The optimistic row is taken back off the list if the server refuses, so
+       waiting for the write to land and looking for it again is how we know
+       whether this actually saved. Throwing leaves the user on the filled-in
+       form with the API's error toast, rather than on an empty list. */
+    return api.settled().then(() => {
+      if (!employees.some((e) => e.email === employee.email)) {
+        throw new Error("Employee was rejected by the server");
+      }
+      nav("/hr/employees");
+    });
   };
   return (
     <form ref={formRef} onSubmit={(e) => e.preventDefault()}>

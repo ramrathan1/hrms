@@ -2,6 +2,7 @@ import { Plus } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { DataTable } from "@/components/DataTable";
+import { can } from "@/lib/api";
 import { useCrud } from "@/components/crud";
 import { DurationFilter, FilterBar, PageHeader } from "@/components/PageHeader";
 import { Avatar, Progress, SearchInput, Select, StatusPill } from "@/components/ui";
@@ -41,9 +42,11 @@ export default function Projects() {
         title="Projects"
         crumbs={["Work"]}
         actions={
-          <Link to="/work/projects/new" className="btn-primary">
-            <Plus size={15} /> Add Project
-          </Link>
+          can("projects:create") ? (
+            <Link to="/work/projects/new" className="btn-primary">
+              <Plus size={15} /> Add Project
+            </Link>
+          ) : undefined
         }
       />
       <FilterBar>

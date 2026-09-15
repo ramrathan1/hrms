@@ -10,7 +10,7 @@ import { ConfirmDialog } from "@/components/crud";
 import { Modal, StatusPill, Tabs } from "@/components/ui";
 import { PermissionMatrix } from "@/components/PermissionMatrix";
 import { api, getSetting, onStoreChange, resetDemoData, saveSetting, storeSize } from "@/lib/api";
-import { LEAVE_QUOTA, LEAVE_TYPES } from "@/lib/leaveBalance";
+import { leaveTypes } from "@/lib/leaveBalance";
 import { employees } from "@/data/core";
 import { CURRENT_USER, useToast } from "@/lib/store";
 
@@ -1459,12 +1459,12 @@ function SectionBody({ slug }: { slug: string }) {
                 </tr>
               </thead>
               <tbody className="divide-y divide-line">
-                {LEAVE_TYPES.map((t) => (
+                {leaveTypes().map(({ name: t, quota }) => (
                   <tr key={t}>
                     <td className="px-4 py-2.5 font-medium">{t}</td>
                     <td className="px-4 py-2">
                       <label className="block"><span className="lbl" style={{ display: "none" }}>{`${t} days per year`}</span>
-                        <input className="input w-24" defaultValue={String(LEAVE_QUOTA[t] ?? 0)} /></label>
+                        <input className="input w-24" defaultValue={String(quota)} /></label>
                     </td>
                     <td className="px-4 py-2.5"><CheckboxInput label={`${t} paid`} defaultChecked hideLabel /></td>
                     <td className="px-4 py-2.5"><CheckboxInput label={`${t} carry forward`} defaultChecked={t === "Earned"} hideLabel /></td>
